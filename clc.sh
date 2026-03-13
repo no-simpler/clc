@@ -9,13 +9,39 @@ set -euo pipefail
 CLC_VERSION="0.1.0"
 CLC_STORE="${HOME}/.clc"
 
+# ── Color / style ─────────────────────────────────────────────────────────────
+
+# Populated by setup_color(); empty strings when color is disabled.
+CLR_BOLD="" CLR_DIM="" CLR_RESET=""
+CLR_SECTION="" CLR_KEY="" CLR_VAL="" CLR_MUTED=""
+
+setup_color() {
+    # Disable when NO_COLOR is set, --no-color was passed, or stdout is not a tty.
+    if [[ -n "${NO_COLOR-}" || "${OPT_NO_COLOR}" == 1 || ! -t 1 ]]; then
+        return
+    fi
+    CLR_BOLD=$'\e[1m'
+    CLR_DIM=$'\e[2m'
+    CLR_RESET=$'\e[0m'
+    CLR_SECTION="${CLR_BOLD}"          # section headers
+    CLR_KEY="${CLR_DIM}"               # label column
+    CLR_VAL=""                         # value column (plain)
+    CLR_MUTED="${CLR_DIM}"             # <none> / secondary info
+}
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 die() { echo "clc: error: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 
-# Print formatted key/value info line.
-info_line() { printf "  %-20s %s\n" "$1" "$2"; }
+# Shorten a path by replacing $HOME prefix with ~.
+short_path() { echo "${1/#${HOME}/\~}"; }
+
+# Print a section header.
+print_header() { echo "${CLR_SECTION}${1}${CLR_RESET}"; }
+
+# Print a key/value info line with consistent label width.
+info_line() { printf "  ${CLR_KEY}%-18s${CLR_RESET} ${CLR_VAL}%s${CLR_RESET}\n" "$1" "$2"; }
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
 
@@ -43,8 +69,8 @@ git_main_worktree() {
     git --git-dir="${main_path}" rev-parse --show-toplevel 2>/dev/null
 }
 
-# List peer worktrees: worktrees whose path matches <parent>/<main-name>-<suffix>
-# Prints lines of: <worktree-path> <branch>
+# List peer worktrees: worktrees whose path matches <parent>/<main-name>-<suffix>.
+# Prints tab-separated lines: <worktree-path> <branch>
 list_peer_worktrees() {
     local main_worktree="$1"
     local parent base
@@ -71,30 +97,34 @@ list_peer_worktrees() {
 
 cmd_status() {
     local main_path main_worktree
-
     main_path=$(git_main_path) || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_path}") \
         || die "unable to determine main worktree"
 
-    echo "Repository"
-    info_line "main path:" "${main_path}"
-    info_line "worktree:" "${main_worktree}"
+    print_header "Repository"
+    local sp; sp=$(short_path "${main_worktree}")
+    info_line "path:" "${sp%/*}/${CLR_BOLD}${sp##*/}${CLR_RESET}"
 
     local peers=()
     while IFS=$'\t' read -r wt_path wt_branch; do
-        peers+=("${wt_path}|${wt_branch}")
+        peers+=("${wt_path}	${wt_branch}")
     done < <(list_peer_worktrees "${main_worktree}")
 
     echo
+    print_header "Managed peer worktrees"
     if [[ ${#peers[@]} -eq 0 ]]; then
-        echo "Managed peer worktrees: none"
+        echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
-        echo "Managed peer worktrees"
+        local base; base=$(basename "${main_worktree}")
         for entry in "${peers[@]}"; do
-            local p b
-            p=${entry%%|*}
-            b=${entry##*|}
-            info_line "$(basename "${p}"):" "${p} (${b})"
+            local p b sp wt_name
+            p=${entry%%	*}
+            b=${entry##*	}
+            sp=$(short_path "${p}")
+            # Worktree name is the part after "<base>-" in the directory name
+            wt_name=${p##*/${base}-}
+            # Display: dim path prefix, bold worktree-name, dim branch
+            info_line "${wt_name}:" "${sp%/${base}-*}/${base}-${CLR_BOLD}${wt_name}${CLR_RESET} ${CLR_MUTED}(${b})${CLR_RESET}"
         done
     fi
 }
@@ -110,6 +140,7 @@ Usage: clc [options] [action]
 Options:
   -h, --help      Show this help and exit
   -V, --version   Show version and exit
+      --no-color  Disable colored output
 
 Actions:
   status          Show repo info and managed worktrees (default)
@@ -122,17 +153,21 @@ EOF
 
 main() {
     local action=""
+    OPT_NO_COLOR=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -h|--help)    usage; exit 0 ;;
-            -V|--version) echo "clc ${CLC_VERSION}"; exit 0 ;;
-            -*)           echo "clc: unknown option: $1" >&2; echo "Try 'clc --help' for usage." >&2; exit 1 ;;
+            -h|--help)     usage; exit 0 ;;
+            -V|--version)  echo "clc ${CLC_VERSION}"; exit 0 ;;
+            --no-color)    OPT_NO_COLOR=1 ;;
+            -*)            echo "clc: unknown option: $1" >&2
+                           echo "Try 'clc --help' for usage." >&2; exit 1 ;;
             *)
                 if [[ -z "${action}" ]]; then
                     action="$1"
                 else
-                    echo "clc: unexpected argument: $1" >&2; echo "Try 'clc --help' for usage." >&2; exit 1
+                    echo "clc: unexpected argument: $1" >&2
+                    echo "Try 'clc --help' for usage." >&2; exit 1
                 fi
                 ;;
         esac
@@ -140,10 +175,12 @@ main() {
     done
 
     need_cmd git
+    setup_color
 
     case "${action}" in
         ""|status) cmd_status ;;
-        *) echo "clc: unknown action: ${action}" >&2; echo "Try 'clc --help' for usage." >&2; exit 1 ;;
+        *) echo "clc: unknown action: ${action}" >&2
+           echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac
 }
 
