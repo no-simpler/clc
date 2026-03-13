@@ -23,4 +23,4 @@ Compartmentalized code. Short, readable functions. Succinct comments where it ai
 
 ## Development loop
 
-No compilation necessary, script should remain a single file and be runnable from it.
+No compilation necessary, script should remain a single file and be runnable from it. Remember to always keep --help output in sync with latest features.
