@@ -43,8 +43,15 @@ need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 # Shorten a path by replacing $HOME prefix with ~.
 short_path() { echo "${1/#${HOME}/\~}"; }
 
-# Print a section header.
-print_header() { echo "${CLR_SECTION}${1}${CLR_RESET}"; }
+# Print a section header with optional muted subtitle on the same line.
+print_header() {
+    local heading="$1" subtitle="${2-}"
+    if [[ -n "${subtitle}" ]]; then
+        echo "${CLR_BOLD}${heading}${CLR_RESET} ${subtitle}"
+    else
+        echo "${CLR_BOLD}${heading}${CLR_RESET}"
+    fi
+}
 
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
@@ -149,33 +156,48 @@ cmd_status() {
         esac
     done < <(list_all_worktrees "${main_worktree}")
 
+    # Compute max visible content width across all sections for branch alignment.
+    # styled_path contains ANSI codes so use ${#sp} (visible length) for section 1.
+    local sp_main; sp_main=$(short_path "${main_worktree}")
+    local max_content_len=${#sp_main}
+    [[ ${max_peer_name_len} -gt ${max_content_len} ]] && max_content_len=${max_peer_name_len}
+    for row in "${unmanaged_rows[@]}"; do
+        local u_path u_branch u_sp
+        IFS=$'\001' read -r u_path u_branch <<< "${row}"
+        u_sp=$(short_path "${u_path}")
+        [[ ${#u_sp} -gt ${max_content_len} ]] && max_content_len=${#u_sp}
+    done
+
     # Section 1: Repository & main worktree
     print_header "Repository"
-    local sp; sp=$(short_path "${main_worktree}")
-    local styled_path="${sp%/*}/${CLR_BOLD}${sp##*/}${CLR_RESET}"
+    local sp styled_path main_pad
+    sp="${sp_main}"
+    styled_path="${sp%/*}/${CLR_BOLD}${sp##*/}${CLR_RESET}"
+    main_pad=$(( max_content_len - ${#sp} ))
     if [[ "${main_worktree}" == "${current_worktree}" ]]; then
-        printf "  ${CLR_BOLD}*${CLR_RESET} %s  ${CLR_MUTED}(%s)${CLR_RESET}\n" "${styled_path}" "${main_branch}"
+        printf "  ${CLR_BOLD}*${CLR_RESET} %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
+            "${styled_path}" "${main_pad}" "" "${main_branch}"
     else
-        printf "    %s  ${CLR_MUTED}(%s)${CLR_RESET}\n" "${styled_path}" "${main_branch}"
+        printf "    %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
+            "${styled_path}" "${main_pad}" "" "${main_branch}"
     fi
 
-    # Section 2: Managed peer worktrees
+    # Section 2: Managed worktrees
+    local parent_dir; parent_dir=$(short_path "$(dirname "${main_worktree}")")
     echo
-    print_header "Managed peer worktrees"
+    print_header "Managed worktrees" "in ${parent_dir}"
     if [[ ${#peer_rows[@]} -eq 0 ]]; then
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
         for row in "${peer_rows[@]}"; do
-            local name path branch padded
+            local name path branch
             IFS=$'\001' read -r name path branch <<< "${row}"
-            padded=$(printf "%-${max_peer_name_len}s" "${name}")
-            sp=$(short_path "${path}")
             if [[ "${path}" == "${current_worktree}" ]]; then
-                printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%s${CLR_RESET}  %s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${padded}" "${sp}" "${branch}"
+                printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
+                    "${max_content_len}" "${name}" "${branch}"
             else
-                printf "    %s  %s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${padded}" "${sp}" "${branch}"
+                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
+                    "${max_content_len}" "${name}" "${branch}"
             fi
         done
     fi
@@ -191,11 +213,11 @@ cmd_status() {
             IFS=$'\001' read -r path branch <<< "${row}"
             sp=$(short_path "${path}")
             if [[ "${path}" == "${current_worktree}" ]]; then
-                printf "  ${CLR_BOLD}*${CLR_RESET} %s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${sp}" "${branch}"
+                printf "  ${CLR_BOLD}*${CLR_RESET} %-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
+                    "${max_content_len}" "${sp}" "${branch}"
             else
-                printf "    %s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${sp}" "${branch}"
+                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
+                    "${max_content_len}" "${sp}" "${branch}"
             fi
         done
     fi
