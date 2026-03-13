@@ -1,0 +1,13 @@
+Unignored
+  - CLAUDE.md
+  - /.claude/
+
+Repository
+  * ~/Developer/clc/test/repos/ignore-unignored/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/repos/ignore-unignored
+  <none>
+
+Unmanaged worktrees
+  <none>

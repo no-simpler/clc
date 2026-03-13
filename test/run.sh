@@ -75,7 +75,10 @@ run_case() {
         site=$(basename "${site_dir%/}")
         snapshot="${case_expected}/${site}.txt"
 
-        actual=$(cd "${site_dir}" && bash "${CLC}" --no-color 2>&1) || true
+        local clc_action="" cmd_file="${case_expected}/${site}.cmd"
+        [[ -f "${cmd_file}" ]] && clc_action=$(cat "${cmd_file}")
+        # shellcheck disable=SC2086
+        actual=$(cd "${site_dir}" && bash "${CLC}" --no-color ${clc_action} 2>&1) || true
 
         if [[ ${OPT_UPDATE} -eq 1 ]]; then
             mkdir -p "${case_expected}"

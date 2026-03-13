@@ -185,6 +185,69 @@ list_all_worktrees() {
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+cmd_ignore() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)         || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                           || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                           || die "unable to determine current worktree"
+
+    local exclude_file="${main_gitdir}/info/exclude"
+    mkdir -p "${main_gitdir}/info"
+    [[ -f "${exclude_file}" ]] || touch "${exclude_file}"
+
+    local -a added=()
+    for pat in "${CLC_PAT_MD}" "${CLC_PAT_DIR}"; do
+        if ! grep -qxF "${pat}" "${exclude_file}" 2>/dev/null; then
+            echo "${pat}" >> "${exclude_file}"
+            added+=("${pat}")
+        fi
+    done
+
+    print_header "Ignored"
+    if [[ ${#added[@]} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(already up to date)${CLR_RESET}"
+    else
+        for pat in "${added[@]}"; do echo "  + ${pat}"; done
+    fi
+    echo
+
+    cmd_status
+}
+
+cmd_unignore() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)         || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                           || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                           || die "unable to determine current worktree"
+
+    local exclude_file="${main_gitdir}/info/exclude"
+    local -a removed=()
+
+    if [[ -f "${exclude_file}" ]]; then
+        for pat in "${CLC_PAT_MD}" "${CLC_PAT_DIR}"; do
+            if grep -qxF "${pat}" "${exclude_file}" 2>/dev/null; then
+                grep -vxF "${pat}" "${exclude_file}" > "${exclude_file}.tmp" || true
+                mv "${exclude_file}.tmp" "${exclude_file}"
+                removed+=("${pat}")
+            fi
+        done
+    fi
+
+    print_header "Unignored"
+    if [[ ${#removed[@]} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing to remove)${CLR_RESET}"
+    else
+        for pat in "${removed[@]}"; do echo "  - ${pat}"; done
+    fi
+    echo
+
+    cmd_status
+}
+
 cmd_status() {
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
@@ -322,6 +385,8 @@ Options:
 
 Actions:
   status          Show repository info and managed worktrees (default)
+  ignore          Add Claude-related patterns to .git/info/exclude
+  unignore        Remove Claude-related patterns from .git/info/exclude
 
 Claude-related files managed by clc:
   CLAUDE.md (any depth), .claude/ (worktree root only)
@@ -363,6 +428,8 @@ main() {
 
     case "${action}" in
         ""|status) cmd_status ;;
+        ignore)    cmd_ignore ;;
+        unignore)  cmd_unignore ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac
