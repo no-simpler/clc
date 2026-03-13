@@ -1,0 +1,14 @@
+--- prune (removes clean1 and clean2, skips dirty) ---
+Pruned
+  - clean1  (clean1)
+  - clean2  (clean2)
+
+Repository
+  * ~/Developer/clc/test/repos/prune/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/repos/prune
+    dirty                                  (dirty) (dirty)
+
+Unmanaged worktrees
+  <none>

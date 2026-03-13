@@ -1,0 +1,17 @@
+--- rm dirty peer (fail: uncommitted changes) ---
+clc: error: worktree 'other' has uncommitted changes
+--- rm current worktree (fail: current) ---
+clc: error: cannot remove current worktree 'feat'
+--- rm clean peer (success) ---
+Removed
+  ~/Developer/clc/test/repos/rm/main-feat  (feat)
+
+Repository
+  * ~/Developer/clc/test/repos/rm/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/repos/rm
+    other                               (other) (dirty)
+
+Unmanaged worktrees
+  <none>

@@ -48,9 +48,38 @@ passed=0
 failed=0
 updated=0
 
+check_snapshot() {
+    local label="$1" snapshot="$2" actual="$3"
+    if [[ ${OPT_UPDATE} -eq 1 ]]; then
+        mkdir -p "$(dirname "${snapshot}")"
+        printf '%s\n' "${actual}" > "${snapshot}"
+        echo "[${label}] updated"
+        updated=$(( updated + 1 ))
+    elif [[ ! -f "${snapshot}" ]]; then
+        echo "[${label}] ✗  no snapshot — run with --update to create"
+        failed=$(( failed + 1 ))
+    else
+        local expected
+        expected=$(cat "${snapshot}")
+        if [[ "${actual}" == "${expected}" ]]; then
+            echo "[${label}] ✓"
+            passed=$(( passed + 1 ))
+        else
+            echo "[${label}] ✗"
+            diff -u \
+                --label "expected (${snapshot##*/REPO_ROOT/})" \
+                --label "actual" \
+                <(printf '%s\n' "${expected}") \
+                <(printf '%s\n' "${actual}") | sed 's/^/  /' || true
+            failed=$(( failed + 1 ))
+        fi
+    fi
+}
+
 run_case() {
     local case_name="$1"
     local case_script="${CASES_DIR}/${case_name}.sh"
+    local action_marker="${CASES_DIR}/${case_name}.action"
     local case_repos="${REPOS_DIR}/${case_name}"
     local case_expected="${EXPECTED_DIR}/${case_name}"
 
@@ -60,51 +89,33 @@ run_case() {
         return
     fi
 
-    # Set up repos, suppressing the case script's own summary output.
-    if ! bash "${case_script}" > /dev/null 2>&1; then
-        echo "[${case_name}] setup failed"
-        failed=$(( failed + 1 ))
-        rm -rf "${case_repos}"
-        return
-    fi
-
-    # Iterate call sites alphabetically.
-    for site_dir in "${case_repos}"/*/; do
-        [[ -d "${site_dir}" ]] || continue
-        local site snapshot actual
-        site=$(basename "${site_dir%/}")
-        snapshot="${case_expected}/${site}.txt"
-
-        local clc_action="" cmd_file="${case_expected}/${site}.cmd"
-        [[ -f "${cmd_file}" ]] && clc_action=$(cat "${cmd_file}")
-        # shellcheck disable=SC2086
-        actual=$(cd "${site_dir}" && bash "${CLC}" --no-color ${clc_action} 2>&1) || true
-
-        if [[ ${OPT_UPDATE} -eq 1 ]]; then
-            mkdir -p "${case_expected}"
-            printf '%s\n' "${actual}" > "${snapshot}"
-            echo "[${case_name}] ${site} updated"
-            updated=$(( updated + 1 ))
-        elif [[ ! -f "${snapshot}" ]]; then
-            echo "[${case_name}] ${site} ✗  no snapshot — run with --update to create"
+    if [[ -f "${action_marker}" ]]; then
+        # Action test: capture case script output directly (it runs clc internally).
+        local actual
+        actual=$(bash "${case_script}" 2>&1) || true
+        check_snapshot "${case_name}" "${case_expected}/output.txt" "${actual}"
+    else
+        # State test: suppress setup, then run clc from each worktree directory.
+        if ! bash "${case_script}" > /dev/null 2>&1; then
+            echo "[${case_name}] setup failed"
             failed=$(( failed + 1 ))
-        else
-            local expected
-            expected=$(cat "${snapshot}")
-            if [[ "${actual}" == "${expected}" ]]; then
-                echo "[${case_name}] ${site} ✓"
-                passed=$(( passed + 1 ))
-            else
-                echo "[${case_name}] ${site} ✗"
-                diff -u \
-                    --label "expected (${snapshot##*/REPO_ROOT/})" \
-                    --label "actual" \
-                    <(printf '%s\n' "${expected}") \
-                    <(printf '%s\n' "${actual}") | sed 's/^/  /' || true
-                failed=$(( failed + 1 ))
-            fi
+            rm -rf "${case_repos}"
+            return
         fi
-    done
+
+        for site_dir in "${case_repos}"/*/; do
+            [[ -d "${site_dir}" ]] || continue
+            local site snapshot actual
+            site=$(basename "${site_dir%/}")
+            snapshot="${case_expected}/${site}.txt"
+
+            local clc_action="" cmd_file="${case_expected}/${site}.cmd"
+            [[ -f "${cmd_file}" ]] && clc_action=$(cat "${cmd_file}")
+            # shellcheck disable=SC2086
+            actual=$(cd "${site_dir}" && bash "${CLC}" --no-color ${clc_action} 2>&1) || true
+            check_snapshot "${case_name}/${site}" "${snapshot}" "${actual}"
+        done
+    fi
 
     rm -rf "${case_repos}"
 }

@@ -185,6 +185,157 @@ list_all_worktrees() {
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+cmd_new() {
+    local full_name="" branch=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) die "unknown option for 'new': $1" ;;
+            *)  if   [[ -z "${full_name}" ]]; then full_name="$1"
+                elif [[ -z "${branch}"    ]]; then branch="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+    [[ -n "${full_name}" ]] || die "usage: clc new <name> [<branch>]"
+
+    # Derive worktree name: last slash-component, then strip leading ticket prefix.
+    local name="${full_name##*/}"
+    if [[ "${name}" =~ ^[A-Z]+-[0-9]+[-_]+(.+)$ ]]; then
+        name="${BASH_REMATCH[1]}"
+    fi
+    [[ "${name}" =~ ^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)*$ ]] \
+        || die "invalid worktree name derived from '${full_name}': '${name}'"
+
+    # Branch: explicit arg → full first arg.
+    [[ -z "${branch}" ]] && branch="${full_name}"
+
+    local main_gitdir main_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+
+    local parent base new_path
+    parent=$(dirname "${main_worktree}")
+    base=$(basename "${main_worktree}")
+    new_path="${parent}/${base}-${name}"
+
+    [[ -e "${new_path}" ]] && die "directory already exists: ${new_path}"
+
+    # Check out existing branch or create a new one.
+    if git -C "${main_worktree}" rev-parse --verify "refs/heads/${branch}" >/dev/null 2>&1; then
+        git -C "${main_worktree}" worktree add "${new_path}" "${branch}" >/dev/null 2>&1 \
+            || die "failed to create worktree '${name}' on branch '${branch}' (already checked out elsewhere?)"
+    else
+        git -C "${main_worktree}" worktree add "${new_path}" -b "${branch}" >/dev/null 2>&1 \
+            || die "failed to create worktree '${name}' with new branch '${branch}'"
+    fi
+
+    print_header "Created"
+    printf "  %s  %s(%s)%s\n" "$(short_path "${new_path}")" "${CLR_MUTED}" "${branch}" "${CLR_RESET}"
+    echo
+
+    cmd_status
+}
+
+cmd_rm() {
+    local opt_with_branch=0 name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -b|--with-branch) opt_with_branch=1 ;;
+            -*) die "unknown option for 'rm': $1" ;;
+            *)  if [[ -z "${name}" ]]; then name="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+    [[ -n "${name}" ]] || die "usage: clc rm [-b] <name>"
+
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                      || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                      || die "unable to determine current worktree"
+
+    # Find the peer by name.
+    local wt_path="" wt_branch="" wt_dirty=""
+    while IFS=$'\001' read -r type row_name path branch dirty; do
+        if [[ "${type}" == "peer" && "${row_name}" == "${name}" ]]; then
+            wt_path="${path}"; wt_branch="${branch}"; wt_dirty="${dirty}"
+            break
+        fi
+    done < <(list_all_worktrees "${main_worktree}")
+
+    [[ -n "${wt_path}" ]]                          || die "no managed peer worktree named '${name}'"
+    [[ "${wt_path}" != "${current_worktree}" ]]    || die "cannot remove current worktree '${name}'"
+    [[ -z "${wt_dirty}" ]]                         || die "worktree '${name}' has uncommitted changes"
+
+    git -C "${main_worktree}" worktree remove "${wt_path}" >/dev/null 2>&1 \
+        || die "failed to remove worktree '${name}'"
+    [[ -d "${wt_path}" ]] && rm -rf "${wt_path}"
+
+    print_header "Removed"
+    printf "  %s  %s(%s)%s\n" "$(short_path "${wt_path}")" "${CLR_MUTED}" "${wt_branch}" "${CLR_RESET}"
+    if [[ ${opt_with_branch} -eq 1 ]]; then
+        git -C "${main_worktree}" branch -d "${wt_branch}" >/dev/null 2>&1 \
+            || print_warning_line "branch '${wt_branch}' not deleted — not fully merged"
+    fi
+    echo
+
+    cmd_status
+}
+
+cmd_prune() {
+    local opt_with_branch=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -b|--with-branch) opt_with_branch=1 ;;
+            -*) die "unknown option for 'prune': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                      || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                      || die "unable to determine current worktree"
+
+    # Collect eligible peers first so we can print "(nothing to prune)" before touching anything.
+    local -a to_remove=()
+    while IFS=$'\001' read -r type name path branch dirty; do
+        [[ "${type}" == "peer" ]]                || continue
+        [[ "${path}" != "${current_worktree}" ]] || continue
+        [[ -z "${dirty}" ]]                      || continue
+        to_remove+=("${name}"$'\001'"${path}"$'\001'"${branch}")
+    done < <(list_all_worktrees "${main_worktree}")
+
+    print_header "Pruned"
+    if [[ ${#to_remove[@]} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing to prune)${CLR_RESET}"
+    else
+        for row in "${to_remove[@]}"; do
+            local r_name r_path r_branch
+            IFS=$'\001' read -r r_name r_path r_branch <<< "${row}"
+            git -C "${main_worktree}" worktree remove "${r_path}" >/dev/null 2>&1 \
+                || die "failed to remove worktree '${r_name}'"
+            [[ -d "${r_path}" ]] && rm -rf "${r_path}"
+            echo "  - ${r_name}  ${CLR_MUTED}(${r_branch})${CLR_RESET}"
+            if [[ ${opt_with_branch} -eq 1 ]]; then
+                git -C "${main_worktree}" branch -d "${r_branch}" >/dev/null 2>&1 \
+                    || print_warning_line "branch '${r_branch}' not deleted — not fully merged"
+            fi
+        done
+    fi
+    echo
+
+    cmd_status
+}
+
 cmd_ignore() {
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)         || die "not inside a Git repository"
@@ -384,9 +535,22 @@ Options:
       --no-color  Disable colored output
 
 Actions:
-  status          Show repository info and managed worktrees (default)
-  ignore          Add Claude-related patterns to .git/info/exclude
-  unignore        Remove Claude-related patterns from .git/info/exclude
+  status                 Show repository info and managed worktrees (default)
+  ignore                 Add Claude-related patterns to .git/info/exclude
+  unignore               Remove Claude-related patterns from .git/info/exclude
+  new|add <name> [<branch>]
+                         Create a new managed peer worktree. Worktree name
+                         derived from <name>: last path component, ticket
+                         prefix stripped (e.g. feature/PROJ-123_foo → foo).
+                         Branch defaults to <name> as-is; pass <branch> to
+                         override. Checks out existing branch or creates new.
+  rm|remove [-b] <name>  Remove a managed peer worktree. Fails if the worktree
+                         is current or has uncommitted changes.
+  prune|clean [-b]       Remove all managed peer worktrees that are not current
+                         and have no uncommitted changes.
+
+  -b, --with-branch  (rm, prune) Also delete the worktree's git branch with
+                     'git branch -d'. Failure is reported as a warning.
 
 Claude-related files managed by clc:
   CLAUDE.md (any depth), .claude/ (worktree root only)
@@ -402,23 +566,25 @@ EOF
 
 main() {
     local action=""
+    local -a cmd_args=()
     OPT_NO_COLOR=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -h|--help)     usage; exit 0 ;;
-            -V|--version)  echo "clc ${CLC_VERSION}"; exit 0 ;;
-            --no-color)    OPT_NO_COLOR=1 ;;
-            -*)            echo "clc: unknown option: $1" >&2
-                           echo "Try 'clc --help' for usage." >&2; exit 1 ;;
-            *)
-                if [[ -z "${action}" ]]; then
-                    action="$1"
-                else
-                    echo "clc: unexpected argument: $1" >&2
-                    echo "Try 'clc --help' for usage." >&2; exit 1
-                fi
-                ;;
+            -h|--help)    usage; exit 0 ;;
+            -V|--version) echo "clc ${CLC_VERSION}"; exit 0 ;;
+            --no-color)   OPT_NO_COLOR=1 ;;
+            -*)           if [[ -n "${action}" ]]; then
+                              cmd_args+=("$1")
+                          else
+                              echo "clc: unknown option: $1" >&2
+                              echo "Try 'clc --help' for usage." >&2; exit 1
+                          fi ;;
+            *)            if [[ -z "${action}" ]]; then
+                              action="$1"
+                          else
+                              cmd_args+=("$1")
+                          fi ;;
         esac
         shift
     done
@@ -427,9 +593,12 @@ main() {
     setup_color
 
     case "${action}" in
-        ""|status) cmd_status ;;
-        ignore)    cmd_ignore ;;
-        unignore)  cmd_unignore ;;
+        ""|status)    cmd_status ;;
+        ignore)       cmd_ignore ;;
+        unignore)     cmd_unignore ;;
+        new|add)      cmd_new "${cmd_args[@]}" ;;
+        rm|remove)    cmd_rm "${cmd_args[@]}" ;;
+        prune|clean)  cmd_prune "${cmd_args[@]}" ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac

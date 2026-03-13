@@ -1,0 +1,15 @@
+--- prune -b (merged deleted, unmerged warned, dirty skipped) ---
+Pruned
+  - merged  (merged)
+  - unmerged  (unmerged)
+      branch 'unmerged' not deleted — not fully merged
+
+Repository
+  * ~/Developer/clc/test/repos/prune-with-branch/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/repos/prune-with-branch
+    dirty                                              (dirty) (dirty)
+
+Unmanaged worktrees
+  <none>
