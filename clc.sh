@@ -121,13 +121,17 @@ list_all_worktrees() {
             wt_branch="<unknown>"
         fi
 
+        # Dirty if the worktree has any staged or unstaged changes
+        local wt_dirty=""
+        [[ -n "$(git -C "${wt_path}" status --porcelain 2>/dev/null)" ]] && wt_dirty="dirty"
+
         if [[ "${wt_path}" == "${main_worktree}" ]]; then
-            printf "main\001main\001%s\001%s\n" "${wt_path}" "${wt_branch}"
+            printf "main\001main\001%s\001%s\001%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
         elif [[ "${wt_path}" == "${parent}/${base}-"* ]]; then
             local wt_name="${wt_path##*/${base}-}"
-            printf "peer\001%s\001%s\001%s\n" "${wt_name}" "${wt_path}" "${wt_branch}"
+            printf "peer\001%s\001%s\001%s\001%s\n" "${wt_name}" "${wt_path}" "${wt_branch}" "${wt_dirty}"
         else
-            printf "unmanaged\001\001%s\001%s\n" "${wt_path}" "${wt_branch}"
+            printf "unmanaged\001\001%s\001%s\001%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
         fi
     done < <(git -C "${main_worktree}" worktree list 2>/dev/null)
 }
@@ -147,12 +151,13 @@ cmd_status() {
     local -a peer_rows=() unmanaged_rows=()
     local max_peer_name_len=0
 
-    while IFS=$'\001' read -r type name path branch; do
+    local main_dirty=""
+    while IFS=$'\001' read -r type name path branch dirty; do
         case "${type}" in
-            main)     main_branch="${branch}" ;;
-            peer)     peer_rows+=("${name}"$'\001'"${path}"$'\001'"${branch}")
+            main)     main_branch="${branch}"; main_dirty="${dirty}" ;;
+            peer)     peer_rows+=("${name}"$'\001'"${path}"$'\001'"${branch}"$'\001'"${dirty}")
                       [[ ${#name} -gt ${max_peer_name_len} ]] && max_peer_name_len=${#name} ;;
-            unmanaged) unmanaged_rows+=("${path}"$'\001'"${branch}") ;;
+            unmanaged) unmanaged_rows+=("${path}"$'\001'"${branch}"$'\001'"${dirty}") ;;
         esac
     done < <(list_all_worktrees "${main_worktree}")
 
@@ -174,12 +179,14 @@ cmd_status() {
     sp="${sp_main}"
     styled_path="${sp%/*}/${CLR_BOLD}${sp##*/}${CLR_RESET}"
     main_pad=$(( max_content_len - ${#sp} ))
+    local main_dirty_suffix=""
+    [[ -n "${main_dirty}" ]] && main_dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
     if [[ "${main_worktree}" == "${current_worktree}" ]]; then
-        printf "  ${CLR_BOLD}*${CLR_RESET} %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-            "${styled_path}" "${main_pad}" "" "${main_branch}"
+        printf "  ${CLR_BOLD}*${CLR_RESET} %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+            "${styled_path}" "${main_pad}" "" "${main_branch}" "${main_dirty_suffix}"
     else
-        printf "    %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-            "${styled_path}" "${main_pad}" "" "${main_branch}"
+        printf "    %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+            "${styled_path}" "${main_pad}" "" "${main_branch}" "${main_dirty_suffix}"
     fi
 
     # Section 2: Managed worktrees
@@ -190,14 +197,16 @@ cmd_status() {
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
         for row in "${peer_rows[@]}"; do
-            local name path branch
-            IFS=$'\001' read -r name path branch <<< "${row}"
+            local name path branch dirty dirty_suffix
+            IFS=$'\001' read -r name path branch dirty <<< "${row}"
+            dirty_suffix=""
+            [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
             if [[ "${path}" == "${current_worktree}" ]]; then
-                printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${max_content_len}" "${name}" "${branch}"
+                printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                    "${max_content_len}" "${name}" "${branch}" "${dirty_suffix}"
             else
-                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${max_content_len}" "${name}" "${branch}"
+                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                    "${max_content_len}" "${name}" "${branch}" "${dirty_suffix}"
             fi
         done
     fi
@@ -209,15 +218,17 @@ cmd_status() {
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
         for row in "${unmanaged_rows[@]}"; do
-            local path branch
-            IFS=$'\001' read -r path branch <<< "${row}"
+            local path branch dirty dirty_suffix
+            IFS=$'\001' read -r path branch dirty <<< "${row}"
             sp=$(short_path "${path}")
+            dirty_suffix=""
+            [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
             if [[ "${path}" == "${current_worktree}" ]]; then
-                printf "  ${CLR_BOLD}*${CLR_RESET} %-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${max_content_len}" "${sp}" "${branch}"
+                printf "  ${CLR_BOLD}*${CLR_RESET} %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                    "${max_content_len}" "${sp}" "${branch}" "${dirty_suffix}"
             else
-                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}\n" \
-                    "${max_content_len}" "${sp}" "${branch}"
+                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                    "${max_content_len}" "${sp}" "${branch}" "${dirty_suffix}"
             fi
         done
     fi
