@@ -19,7 +19,7 @@ CLC_CLAUDE_DIRS=(".claude")
 
 # Populated by setup_color(); empty strings when color is disabled.
 CLR_BOLD="" CLR_DIM="" CLR_RESET=""
-CLR_SECTION="" CLR_KEY="" CLR_VAL="" CLR_MUTED=""
+CLR_SECTION="" CLR_KEY="" CLR_VAL="" CLR_MUTED="" CLR_WARN=""
 
 setup_color() {
     # Disable when NO_COLOR is set, --no-color was passed, or stdout is not a tty.
@@ -33,6 +33,7 @@ setup_color() {
     CLR_KEY="${CLR_DIM}"               # label column
     CLR_VAL=""                         # value column (plain)
     CLR_MUTED="${CLR_DIM}"             # <none> / secondary info
+    CLR_WARN=$'\e[1;33m'              # bold yellow for warnings
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -53,6 +54,52 @@ print_header() {
     fi
 }
 
+
+# ── Claude-file state detection ───────────────────────────────────────────────
+
+# Exact patterns we look for in ignore files (slashes significant).
+CLC_PAT_MD="CLAUDE.md"
+CLC_PAT_DIR="/.claude/"
+
+# Return 0 if any Claude-related files are tracked by git in the given worktree.
+claude_files_tracked() {
+    local wt="$1"
+    git -C "${wt}" ls-files -- "CLAUDE.md" "*/CLAUDE.md" ".claude" 2>/dev/null | grep -q .
+}
+
+# Echo "yes", "partial", or "no" based on exact-line presence of both/one/neither
+# CLC pattern in .git/info/exclude (uncommented = exact match, no leading #).
+claude_local_ignore_state() {
+    local main_gitdir="$1"
+    local exclude_file="${main_gitdir}/info/exclude"
+    local has_md=0 has_dir=0
+    if [[ -f "${exclude_file}" ]]; then
+        grep -qxF "${CLC_PAT_MD}"  "${exclude_file}" 2>/dev/null && has_md=1
+        grep -qxF "${CLC_PAT_DIR}" "${exclude_file}" 2>/dev/null && has_dir=1
+    fi
+    if   [[ ${has_md} -eq 1 && ${has_dir} -eq 1 ]]; then echo "yes"
+    elif [[ ${has_md} -eq 1 || ${has_dir} -eq 1 ]]; then echo "partial"
+    else echo "no"
+    fi
+}
+
+# Return 0 if any CLC pattern appears as an uncommented exact line in root .gitignore.
+claude_in_gitignore() {
+    local wt="$1"
+    local gitignore="${wt}/.gitignore"
+    [[ -f "${gitignore}" ]] || return 1
+    grep -qxF "${CLC_PAT_MD}"  "${gitignore}" 2>/dev/null && return 0
+    grep -qxF "${CLC_PAT_DIR}" "${gitignore}" 2>/dev/null && return 0
+    return 1
+}
+
+# Print a warning line subordinate to the line above it.  Args: warning messages.
+print_warning_line() {
+    [[ $# -eq 0 ]] && return
+    local msg="$1"; shift
+    for w in "$@"; do msg+="; ${w}"; done
+    printf "      %s%s%s\n" "${CLR_WARN}" "${msg}" "${CLR_RESET}"
+}
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
 
@@ -146,6 +193,24 @@ cmd_status() {
     current_worktree=$(git_current_worktree) \
                                       || die "unable to determine current worktree"
 
+    # ── Claude-file state for current worktree ────────────────────────────────
+    local state_tracked=0 state_ignore state_gitignore=0
+    claude_files_tracked   "${current_worktree}"     && state_tracked=1
+    state_ignore=$(claude_local_ignore_state "${main_gitdir}")
+    claude_in_gitignore    "${current_worktree}"     && state_gitignore=1
+
+    # Global golden-state flag (used by future commands).
+    IS_GOLDEN=0
+    [[ ${state_tracked} -eq 0 && "${state_ignore}" == "yes" && ${state_gitignore} -eq 0 ]] \
+        && IS_GOLDEN=1
+
+    # Warning buckets: main-worktree-level vs current-worktree-level.
+    local -a main_warnings=() cur_warnings=()
+    [[ "${state_ignore}" == "no"      ]] && main_warnings+=("Claude files not ignored")
+    [[ "${state_ignore}" == "partial" ]] && main_warnings+=("Claude files only partially ignored")
+    [[ ${state_tracked}    -eq 1     ]] && cur_warnings+=("Claude files detected")
+    [[ ${state_gitignore}  -eq 1     ]] && cur_warnings+=("Claude files in .gitignore")
+
     # Collect worktrees by category
     local main_branch="<unknown>"
     local -a peer_rows=() unmanaged_rows=()
@@ -184,9 +249,15 @@ cmd_status() {
     if [[ "${main_worktree}" == "${current_worktree}" ]]; then
         printf "  ${CLR_BOLD}*${CLR_RESET} %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
             "${styled_path}" "${main_pad}" "" "${main_branch}" "${main_dirty_suffix}"
+        # Combine main-level and current-level warnings (same line is both).
+        local -a combined_warnings=()
+        [[ ${#main_warnings[@]} -gt 0 ]] && combined_warnings+=("${main_warnings[@]}")
+        [[ ${#cur_warnings[@]}  -gt 0 ]] && combined_warnings+=("${cur_warnings[@]}")
+        if [[ ${#combined_warnings[@]} -gt 0 ]]; then print_warning_line "${combined_warnings[@]}"; fi
     else
         printf "    %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
             "${styled_path}" "${main_pad}" "" "${main_branch}" "${main_dirty_suffix}"
+        if [[ ${#main_warnings[@]} -gt 0 ]]; then print_warning_line "${main_warnings[@]}"; fi
     fi
 
     # Section 2: Managed worktrees
@@ -204,6 +275,7 @@ cmd_status() {
             if [[ "${path}" == "${current_worktree}" ]]; then
                 printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
                     "${max_content_len}" "${name}" "${branch}" "${dirty_suffix}"
+                if [[ ${#cur_warnings[@]} -gt 0 ]]; then print_warning_line "${cur_warnings[@]}"; fi
             else
                 printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
                     "${max_content_len}" "${name}" "${branch}" "${dirty_suffix}"
@@ -226,6 +298,7 @@ cmd_status() {
             if [[ "${path}" == "${current_worktree}" ]]; then
                 printf "  ${CLR_BOLD}*${CLR_RESET} %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
                     "${max_content_len}" "${sp}" "${branch}" "${dirty_suffix}"
+                if [[ ${#cur_warnings[@]} -gt 0 ]]; then print_warning_line "${cur_warnings[@]}"; fi
             else
                 printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
                     "${max_content_len}" "${sp}" "${branch}" "${dirty_suffix}"

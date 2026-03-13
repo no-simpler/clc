@@ -1,0 +1,11 @@
+Repository
+    ~/Developer/clc/test/repos/claude-file-states/main  (main)
+      Claude files only partially ignored
+
+Managed worktrees in ~/Developer/clc/test/repos/claude-file-states
+    clean                                               (feature/clean)
+  * dirty                                               (feature/dirty)
+      Claude files detected; Claude files in .gitignore
+
+Unmanaged worktrees
+  <none>
