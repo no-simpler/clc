@@ -6,16 +6,21 @@
   - Git must be available on $PATH.
   - Avoids replicating Git features — only implements helpful add-on layer.
 - Detects **current repo** at call-site.
-  - Distinguishes each current repo by **main path** (path to its main `.git` directory, not path to current worktree).
-  - Distinguishes worktree at main path from peer worktrees (any other worktree).
-- Manages peer worktrees that follow convention.
-  - If main repo is at `/repos/main-repo`, manages only peer worktrees at `/repos/main-repo-[worktree-name]`.
+  - Distinguishes each current repo by path to its **main worktree** (path to its main `.git` directory).
+  - Distinguishes main worktree from **peer worktrees** (any other worktree).
+  - Distinguishes **current worktree** as worktree from which this command was called (can be main or one of the peers).
+- Distinguishes **managed worktrees** from unmanaged ones.
+  - Managed worktree is either the main worktree or a peer worktree that follows path convention.
+  - Path convention for managed peer worktree: if main worktree is at `/repos/main-repo`, managed peer peer worktree is at `/repos/main-repo-[worktree-name]`.
   - Allows easily creating and deleting managed worktrees.
-  - Does not go too deep into worktree management.
-- Manages `CLAUDE.md` files (at any depth) and `/.claude/` directory for current repo.
+  - Allows convenience actions on worktrees.
+- Defines **Claude-related files** as:
+  - `CLAUDE.md` file (at any depth of worktree).
+  - `/.claude/` directory (only in the root of worktree) with all contents.
+- Manages Claude-related files only in managed worktrees.
   - Allows ignoring these files locally (via `.git/info/exclude`).
-  - Saves current Claude files: moves managed files to local storage at `~/.clc/` (grouped by main path).
-  - Restores previously saved Claude files: moves managed files from
+  - Allows saving Claude files from a current worktree to `~/.clc/` (saved for per current repo).
+  - Allows restoring Claude files from `~/.clc/` to current worktree.
 
 ## Conventions
 
@@ -24,3 +29,26 @@ Compartmentalized code. Short, readable functions. Succinct comments where it ai
 ## Development loop
 
 No compilation necessary, script should remain a single file and be runnable from it. Remember to always keep --help output in sync with latest features.
+
+Do not commit code yourself. When calling `git commit` for other reasons (e.g., verification loop), make sure to disable commig signing to prevent commit pop-ups that break the flow.
+
+## Verification loop
+
+Test cases live in `test/cases/`. Each case is a self-contained shell script that creates a fresh set of git repos under `test/repos/<case-name>/` (that directory is gitignored). Each case creates a sibling set of worktrees: a main repo and any peers/unmanaged worktrees as siblings inside `test/repos/<case-name>/`, following the path convention so clc can detect them correctly.
+
+To run a verification cycle for a case:
+
+```bash
+bash test/cases/base.sh                              # create repos
+bash clc.sh  # run from test/repos/base/main, main-feature, or unmanaged
+rm -rf test/repos/base                               # clean up
+```
+
+The `base` case is the canonical starting point: a main worktree on `main`, one managed peer (`main-feature`, branch `feature/some-feature`), and one unmanaged worktree (detached HEAD).
+
+To create a new test case:
+
+1. Copy `test/cases/base.sh` as `test/cases/<case-name>.sh`.
+2. Change `CASE_DIR` to point at `test/repos/<case-name>`.
+3. Adjust the repo setup to match the state you want to test.
+4. Disable commit signing on any commits: `git -c commit.gpgsign=false commit ...`.
