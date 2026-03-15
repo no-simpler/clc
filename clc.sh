@@ -7,7 +7,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="0.1.0"
+CLC_VERSION="1.0.0"
 CLC_STORE="${CLC_STORE:-${HOME}/.clc}"
 
 # Claude-related files managed by clc:
