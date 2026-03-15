@@ -15,14 +15,7 @@ All `clc` actions are either non-destructive or prompt for confirmation before m
 
 ## Installation
 
-### Homebrew (recommended)
-
-```bash
-brew tap no-simpler/clc
-brew install clc
-```
-
-### curl installer
+### curl installer (recommended)
 
 ```bash
 curl -fsSL https://github.com/no-simpler/clc/releases/latest/download/install.sh | bash
