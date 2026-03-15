@@ -275,6 +275,40 @@ _compare_claude_files() {
     done
 }
 
+# Apply restore from save_dir into wt using pre-populated _CMP_* globals.
+# Prompts only for destructive operations (different content, file only in worktree).
+# Non-destructive additions (file only in storage) are applied silently.
+# Returns 1 if user aborts; 0 on success.
+_apply_restore() {
+    local wt="$1" save_dir="$2"
+    local destructive_diffs=$(( ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+
+    _print_compare_output
+
+    if [[ ${destructive_diffs} -gt 0 ]]; then
+        printf "\nSynchronize? (Data loss possible!) [y/N] "
+        read -r response || response="n"
+        echo
+        if [[ ! "${response}" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return 1
+        fi
+    fi
+
+    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
+        mkdir -p "$(dirname "${wt}/${f}")"
+        cp "${save_dir}/${f}" "${wt}/${f}"
+    done
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
+        mkdir -p "$(dirname "${wt}/${f}")"
+        cp "${save_dir}/${f}" "${wt}/${f}"
+    done
+    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
+        rm -f "${wt}/${f}"
+    done
+    echo "Synchronized."
+}
+
 # Print compare diff sections using the current _CMP_* globals.
 _print_compare_output() {
     print_header "Compare"
@@ -369,33 +403,14 @@ cmd_restore() {
         return 0
     fi
 
-    _print_compare_output
-    printf "\nSynchronize? (Data loss possible!) [y/N] "
-    read -r response || response="n"
-    echo
-
-    if [[ "${response}" =~ ^[Yy]$ ]]; then
-        for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
-            mkdir -p "$(dirname "${current_worktree}/${f}")"
-            cp "${save_dir}/${f}" "${current_worktree}/${f}"
-        done
-        for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
-            mkdir -p "$(dirname "${current_worktree}/${f}")"
-            cp "${save_dir}/${f}" "${current_worktree}/${f}"
-        done
-        for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
-            rm -f "${current_worktree}/${f}"
-        done
-        echo "Synchronized."
-    else
-        echo "Aborted."
-    fi
+    _apply_restore "${current_worktree}" "${save_dir}"
 }
 
 cmd_new() {
-    local full_name="" branch=""
+    local opt_with_claude=0 full_name="" branch=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            -c|--with-claude) opt_with_claude=1 ;;
             -*) die "unknown option for 'new': $1" ;;
             *)  if   [[ -z "${full_name}" ]]; then full_name="$1"
                 elif [[ -z "${branch}"    ]]; then branch="$1"
@@ -404,7 +419,7 @@ cmd_new() {
         esac
         shift
     done
-    [[ -n "${full_name}" ]] || die "usage: clc new <name> [<branch>]"
+    [[ -n "${full_name}" ]] || die "usage: clc new [-c] <name> [<branch>]"
 
     # Derive worktree name: last slash-component, then strip leading ticket prefix.
     local name="${full_name##*/}"
@@ -441,6 +456,26 @@ cmd_new() {
     print_header "Created"
     printf "  %s  %s(%s)%s\n" "$(short_path "${new_path}")" "${CLR_MUTED}" "${branch}" "${CLR_RESET}"
     echo
+
+    if [[ ${opt_with_claude} -eq 1 ]]; then
+        local save_base; save_base=$(repo_save_base "${main_worktree}")
+        local save_dir; save_dir=$(latest_save_dir "${save_base}")
+        if [[ -n "${save_dir}" ]]; then
+            _compare_claude_files "${new_path}" "${save_dir}"
+            local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
+            local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+            if [[ ${diffs} -eq 0 ]]; then
+                echo "All ${total} Claude file(s) in new worktree are in sync with storage."
+                echo
+            else
+                _apply_restore "${new_path}" "${save_dir}" || true
+                echo
+            fi
+        else
+            echo "${CLR_MUTED}(no saved state — run 'clc save' to save Claude files first)${CLR_RESET}"
+            echo
+        fi
+    fi
 
     cmd_status
 }
@@ -811,7 +846,7 @@ Actions:
                          Exits 0 if in sync, 1 if differences exist.
   restore                Restore Claude files from the latest saved state to the
                          current worktree. Prompts before making any changes.
-  new|add <name> [<branch>]
+  new|add [-c] <name> [<branch>]
                          Create a new managed peer worktree. Worktree name
                          derived from <name>: last path component, ticket
                          prefix stripped (e.g. feature/PROJ-123_foo → foo).
@@ -824,6 +859,9 @@ Actions:
 
   -b, --with-branch  (rm, prune) Also delete the worktree's git branch with
                      'git branch -d'. Failure is reported as a warning.
+  -c, --with-claude  (new) After creating the worktree, restore Claude files
+                     from the latest saved state. Prompts only for destructive
+                     operations (overwrite or delete).
 
 Claude-related files managed by clc:
   CLAUDE.md (any depth), .claude/ (worktree root only)

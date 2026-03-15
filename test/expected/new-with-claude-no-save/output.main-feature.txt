@@ -1,0 +1,8 @@
+Repository
+    ~/Developer/clc/test/playground/new-with-claude-no-save/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/new-with-claude-no-save
+  * feature                                                       (feature)
+
+Unmanaged worktrees
+  <none>

@@ -1,0 +1,5 @@
+Compare
+  Exists in storage only:
+    + .claude/settings.json
+    + CLAUDE.md
+Synchronized.

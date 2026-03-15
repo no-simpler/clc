@@ -1,0 +1,17 @@
+Created
+  ~/Developer/clc/test/playground/new-with-claude/main-feature  (feature)
+
+Compare
+  Exists in storage only:
+    + .claude/settings.json
+    + CLAUDE.md
+Synchronized.
+
+Repository
+  * ~/Developer/clc/test/playground/new-with-claude/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/new-with-claude
+    feature                                               (feature)
+
+Unmanaged worktrees
+  <none>
