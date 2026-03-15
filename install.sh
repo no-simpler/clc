@@ -10,24 +10,34 @@ BINARY_URL="https://github.com/${REPO}/releases/latest/download/clc.sh"
 # ── Find install dir ───────────────────────────────────────────────────────────
 
 find_install_dir() {
-    # Prefer ~/.local/bin, then /usr/local/bin, then first writable $PATH entry
+    # Build a lookup set of directories currently on $PATH
+    local -A on_path=()
+    local path_entries=()
+    IFS=':' read -ra path_entries <<< "$PATH"
+    for dir in "${path_entries[@]}"; do
+        on_path["$dir"]=1
+    done
+
+    # Prefer ~/.local/bin, then /usr/local/bin — only if on $PATH and writable
     local candidates=("$HOME/.local/bin" "/usr/local/bin")
     for dir in "${candidates[@]}"; do
-        if [[ -d "$dir" && -w "$dir" ]]; then
+        if [[ -n "${on_path[$dir]:-}" && -d "$dir" && -w "$dir" ]]; then
             echo "$dir"; return
         fi
     done
-    # Create ~/.local/bin if it doesn't exist
-    if [[ ! -e "$HOME/.local/bin" ]]; then
+
+    # Create ~/.local/bin if it's referenced in $PATH but doesn't exist yet
+    if [[ -n "${on_path[$HOME/.local/bin]:-}" && ! -e "$HOME/.local/bin" ]]; then
         mkdir -p "$HOME/.local/bin" && echo "$HOME/.local/bin"; return
     fi
-    # Fall back to first writable entry on $PATH
-    IFS=':' read -ra path_entries <<< "$PATH"
+
+    # Fall back to first writable entry on $PATH (guaranteed to be on $PATH)
     for dir in "${path_entries[@]}"; do
         if [[ -d "$dir" && -w "$dir" ]]; then
             echo "$dir"; return
         fi
     done
+
     return 1
 }
 
