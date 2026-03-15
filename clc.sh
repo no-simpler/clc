@@ -45,11 +45,11 @@ need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 # Shorten a path by replacing $HOME prefix with ~.
 short_path() { echo "${1/#${HOME}/\~}"; }
 
-# Print a section header with optional muted subtitle on the same line.
+# Print a section header with optional subtitle on the same line.
 print_header() {
     local heading="$1" subtitle="${2-}"
     if [[ -n "${subtitle}" ]]; then
-        echo "${CLR_BOLD}${heading}${CLR_RESET} ${subtitle}"
+        echo "${CLR_BOLD}${heading}${CLR_RESET} (${subtitle})"
     else
         echo "${CLR_BOLD}${heading}${CLR_RESET}"
     fi
@@ -407,10 +407,10 @@ cmd_restore() {
 }
 
 cmd_new() {
-    local opt_with_claude=0 full_name="" branch=""
+    local opt_no_claude=0 full_name="" branch=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -c|--with-claude) opt_with_claude=1 ;;
+            --no-claude) opt_no_claude=1 ;;
             -*) die "unknown option for 'new': $1" ;;
             *)  if   [[ -z "${full_name}" ]]; then full_name="$1"
                 elif [[ -z "${branch}"    ]]; then branch="$1"
@@ -419,7 +419,7 @@ cmd_new() {
         esac
         shift
     done
-    [[ -n "${full_name}" ]] || die "usage: clc new [-c] <name> [<branch>]"
+    [[ -n "${full_name}" ]] || die "usage: clc new [--no-claude] <name> [<branch>]"
 
     # Derive worktree name: last slash-component, then strip leading ticket prefix.
     local name="${full_name##*/}"
@@ -457,7 +457,7 @@ cmd_new() {
     printf "  %s  %s(%s)%s\n" "$(short_path "${new_path}")" "${CLR_MUTED}" "${branch}" "${CLR_RESET}"
     echo
 
-    if [[ ${opt_with_claude} -eq 1 ]]; then
+    if [[ ${opt_no_claude} -eq 0 ]]; then
         local save_base; save_base=$(repo_save_base "${main_worktree}")
         local save_dir; save_dir=$(latest_save_dir "${save_base}")
         if [[ -n "${save_dir}" ]]; then
@@ -481,10 +481,10 @@ cmd_new() {
 }
 
 cmd_rm() {
-    local opt_with_branch=0 name=""
+    local opt_keep_branch=0 name=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -b|--with-branch) opt_with_branch=1 ;;
+            --keep-branch) opt_keep_branch=1 ;;
             -*) die "unknown option for 'rm': $1" ;;
             *)  if [[ -z "${name}" ]]; then name="$1"
                 else die "unexpected argument: $1"
@@ -492,7 +492,7 @@ cmd_rm() {
         esac
         shift
     done
-    [[ -n "${name}" ]] || die "usage: clc rm [-b] <name>"
+    [[ -n "${name}" ]] || die "usage: clc rm [--keep-branch] <name>"
 
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
@@ -520,9 +520,15 @@ cmd_rm() {
 
     print_header "Removed"
     printf "  %s  %s(%s)%s\n" "$(short_path "${wt_path}")" "${CLR_MUTED}" "${wt_branch}" "${CLR_RESET}"
-    if [[ ${opt_with_branch} -eq 1 ]]; then
-        git -C "${main_worktree}" branch -d "${wt_branch}" >/dev/null 2>&1 \
-            || print_warning_line "branch '${wt_branch}' not deleted — not fully merged"
+    if [[ ${opt_keep_branch} -eq 0 ]]; then
+        local branch_sha
+        branch_sha=$(git -C "${main_worktree}" rev-parse "${wt_branch}" 2>/dev/null || true)
+        if git -C "${main_worktree}" branch -d "${wt_branch}" >/dev/null 2>&1; then
+            printf "      %sbranch deleted%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+            printf "      %sgit branch %s %s%s\n" "${CLR_MUTED}" "${wt_branch}" "${branch_sha}" "${CLR_RESET}"
+        else
+            print_warning_line "branch '${wt_branch}' not deleted — not fully merged"
+        fi
     fi
     echo
 
@@ -530,10 +536,10 @@ cmd_rm() {
 }
 
 cmd_prune() {
-    local opt_with_branch=0
+    local opt_keep_branch=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -b|--with-branch) opt_with_branch=1 ;;
+            --keep-branch) opt_keep_branch=1 ;;
             -*) die "unknown option for 'prune': $1" ;;
             *)  die "unexpected argument: $1" ;;
         esac
@@ -563,13 +569,19 @@ cmd_prune() {
         for row in "${to_remove[@]}"; do
             local r_name r_path r_branch
             IFS=$'\001' read -r r_name r_path r_branch <<< "${row}"
+            local r_sha
+            r_sha=$(git -C "${main_worktree}" rev-parse "${r_branch}" 2>/dev/null || true)
             git -C "${main_worktree}" worktree remove "${r_path}" >/dev/null 2>&1 \
                 || die "failed to remove worktree '${r_name}'"
             [[ -d "${r_path}" ]] && rm -rf "${r_path}"
             echo "  - ${r_name}  ${CLR_MUTED}(${r_branch})${CLR_RESET}"
-            if [[ ${opt_with_branch} -eq 1 ]]; then
-                git -C "${main_worktree}" branch -d "${r_branch}" >/dev/null 2>&1 \
-                    || print_warning_line "branch '${r_branch}' not deleted — not fully merged"
+            if [[ ${opt_keep_branch} -eq 0 ]]; then
+                if git -C "${main_worktree}" branch -d "${r_branch}" >/dev/null 2>&1; then
+                    printf "      %sbranch deleted%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+                    printf "      %sgit branch %s %s%s\n" "${CLR_MUTED}" "${r_branch}" "${r_sha}" "${CLR_RESET}"
+                else
+                    print_warning_line "branch '${r_branch}' not deleted — not fully merged"
+                fi
             fi
         done
     fi
@@ -740,44 +752,50 @@ cmd_status() {
         esac
     done < <(list_all_worktrees "${main_worktree}")
 
+    # Parent dir is shared by all managed worktrees; printed once in section 1.
+    local parent_dir_abs parent_dir_disp
+    parent_dir_abs=$(dirname "${main_worktree}")
+    parent_dir_disp=$(short_path "${parent_dir_abs}")
+
     # Compute max visible content width across all sections for branch alignment.
-    # styled_path contains ANSI codes so use ${#sp} (visible length) for section 1.
-    local sp_main; sp_main=$(short_path "${main_worktree}")
-    local max_content_len=${#sp_main}
+    # Use basename for main worktree and short names for peers (already names).
+    local main_name; main_name=$(basename "${main_worktree}")
+    local max_content_len=${#main_name}
     [[ ${max_peer_name_len} -gt ${max_content_len} ]] && max_content_len=${max_peer_name_len}
     for row in "${unmanaged_rows[@]}"; do
-        local u_path u_branch u_sp
+        local u_path u_branch u_display
         IFS=$'\001' read -r u_path u_branch <<< "${row}"
-        u_sp=$(short_path "${u_path}")
-        [[ ${#u_sp} -gt ${max_content_len} ]] && max_content_len=${#u_sp}
+        if [[ "${u_path}" == "${parent_dir_abs}/"* ]]; then
+            u_display="${u_path##${parent_dir_abs}/}"
+        else
+            u_display=$(short_path "${u_path}")
+        fi
+        [[ ${#u_display} -gt ${max_content_len} ]] && max_content_len=${#u_display}
     done
 
     # Section 1: Repository & main worktree
-    print_header "Repository"
-    local sp styled_path main_pad
-    sp="${sp_main}"
-    styled_path="${sp%/*}/${CLR_BOLD}${sp##*/}${CLR_RESET}"
-    main_pad=$(( max_content_len - ${#sp} ))
+    print_header "Repository" "parent dir: ${parent_dir_disp}"
+    local main_pad
+    main_pad=$(( max_content_len - ${#main_name} ))
     local main_dirty_suffix=""
     [[ -n "${main_dirty}" ]] && main_dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
     if [[ "${main_worktree}" == "${current_worktree}" ]]; then
-        printf "  ${CLR_BOLD}*${CLR_RESET} %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-            "${styled_path}" "${main_pad}" "" "${main_branch}" "${main_dirty_suffix}"
+        printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+            "${max_content_len}" "${main_name}" "${main_branch}" "${main_dirty_suffix}"
         # Combine main-level and current-level warnings (same line is both).
         local -a combined_warnings=()
         [[ ${#main_warnings[@]} -gt 0 ]] && combined_warnings+=("${main_warnings[@]}")
         [[ ${#cur_warnings[@]}  -gt 0 ]] && combined_warnings+=("${cur_warnings[@]}")
         if [[ ${#combined_warnings[@]} -gt 0 ]]; then print_warning_line "${combined_warnings[@]}"; fi
     else
-        printf "    %s%-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-            "${styled_path}" "${main_pad}" "" "${main_branch}" "${main_dirty_suffix}"
+        printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+            "${max_content_len}" "${main_name}" "${main_branch}" "${main_dirty_suffix}"
         if [[ ${#main_warnings[@]} -gt 0 ]]; then print_warning_line "${main_warnings[@]}"; fi
     fi
 
     # Section 2: Managed worktrees
-    local parent_dir; parent_dir=$(short_path "$(dirname "${main_worktree}")")
     echo
-    print_header "Managed worktrees" "in ${parent_dir}"
+    print_header "Managed worktrees"
     if [[ ${#peer_rows[@]} -eq 0 ]]; then
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
@@ -804,18 +822,22 @@ cmd_status() {
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
         for row in "${unmanaged_rows[@]}"; do
-            local path branch dirty dirty_suffix
+            local path branch dirty dirty_suffix u_disp
             IFS=$'\001' read -r path branch dirty <<< "${row}"
-            sp=$(short_path "${path}")
             dirty_suffix=""
             [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
+            if [[ "${path}" == "${parent_dir_abs}/"* ]]; then
+                u_disp="${path##${parent_dir_abs}/}"
+            else
+                u_disp=$(short_path "${path}")
+            fi
             if [[ "${path}" == "${current_worktree}" ]]; then
                 printf "  ${CLR_BOLD}*${CLR_RESET} %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-                    "${max_content_len}" "${sp}" "${branch}" "${dirty_suffix}"
+                    "${max_content_len}" "${u_disp}" "${branch}" "${dirty_suffix}"
                 if [[ ${#cur_warnings[@]} -gt 0 ]]; then print_warning_line "${cur_warnings[@]}"; fi
             else
                 printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-                    "${max_content_len}" "${sp}" "${branch}" "${dirty_suffix}"
+                    "${max_content_len}" "${u_disp}" "${branch}" "${dirty_suffix}"
             fi
         done
     fi
@@ -851,22 +873,25 @@ Actions (Claude files):
                          the current worktree. Prompts before making changes.
 
 Actions (Worktrees):
-  new|add [-c] <name> [<branch>]
-                         Create a new managed peer worktree. Worktree name
+  new|add [--no-claude] <name> [<branch>]
+                         Create a new managed peer worktree and restore Claude
+                         files from the latest saved state. Worktree name
                          derived from <name>: last path component, ticket
                          prefix stripped (e.g. feature/PROJ-123_foo → foo).
                          Branch defaults to <name> as-is; pass <branch> to
                          override. Checks out existing branch or creates new.
-  rm|remove [-b] <name>  Remove a managed peer worktree. Fails if the worktree
-                         is current or has uncommitted changes.
-  prune|clean [-b]       Remove all managed peer worktrees that are not current
-                         and have no uncommitted changes.
+  rm|remove [--keep-branch] <name>
+                         Remove a managed peer worktree and delete its git
+                         branch. Fails if the worktree is current or has
+                         uncommitted changes.
+  prune|clean [--keep-branch]
+                         Remove all managed peer worktrees that are not current
+                         and have no uncommitted changes. Deletes their git
+                         branches by default.
 
-  -b, --with-branch  (rm, prune) Also delete the worktree's git branch with
-                     'git branch -d'. Failure is reported as a warning.
-  -c, --with-claude  (new) After creating the worktree, restore Claude files
-                     from the latest saved state. Prompts only for destructive
-                     operations (overwrite or delete).
+  --keep-branch  (rm, prune) Keep the worktree's git branch instead of
+                 deleting it with 'git branch -d'.
+  --no-claude    (new) Skip restoring Claude files from saved state.
 
 Claude-related files managed by clc:
   CLAUDE.md (any depth), .claude/ (worktree root only)

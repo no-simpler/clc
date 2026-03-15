@@ -1,5 +1,5 @@
 Saved
-  ~/Developer/clc/test/playground/save-full-path/.clc-store/saved/main@9bf3456b1588fc1cc090946a7b64ce6f/<timestamp>
+  %%PARENT_DIR%%/.clc-store/saved/main@9bf3456b1588fc1cc090946a7b64ce6f/<timestamp>
   1 file(s)
 ---
-/Users/sargeri/Developer/clc/test/playground/save-full-path/main
+%%PARENT_DIR%%/main

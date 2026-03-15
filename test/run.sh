@@ -80,6 +80,15 @@ check_snapshot() {
     fi
 }
 
+normalize_output() {
+    # Replace actual parent dir path with a stable placeholder so snapshots are
+    # machine-independent. Both ${HOME}-shortened and absolute forms are replaced.
+    local out="$1" parent_disp="$2" parent_abs="$3"
+    out="${out//${parent_disp}/%%PARENT_DIR%%}"
+    out="${out//${parent_abs}/%%PARENT_DIR%%}"
+    printf '%s' "${out}"
+}
+
 run_case() {
     local case_name="$1"
     local case_script="${CASES_DIR}/${case_name}.sh"
@@ -92,6 +101,11 @@ run_case() {
         return
     fi
 
+    # Parent dir displayed in status output (same logic as short_path in clc.sh).
+    local parent_dir_abs parent_dir_disp
+    parent_dir_abs="${case_playground}"
+    parent_dir_disp="${case_playground/#${HOME}/\~}"
+
     # Step 1: Run case script, capture stdout and stderr.
     local action_out
     action_out=$(bash "${case_script}" 2>&1) || true
@@ -99,10 +113,12 @@ run_case() {
     # Step 2: Assert action output.
     # On --update: write if stdout is non-empty. On compare: check if file exists.
     local action_snapshot="${case_expected}/output.action.txt"
+    local action_normalized
+    action_normalized=$(normalize_output "${action_out}" "${parent_dir_disp}" "${parent_dir_abs}")
     if [[ ${OPT_UPDATE} -eq 1 && -n "${action_out}" ]]; then
-        check_snapshot "${case_name}/action" "${action_snapshot}" "${action_out}"
+        check_snapshot "${case_name}/action" "${action_snapshot}" "${action_normalized}"
     elif [[ -f "${action_snapshot}" ]]; then
-        check_snapshot "${case_name}/action" "${action_snapshot}" "${action_out}"
+        check_snapshot "${case_name}/action" "${action_snapshot}" "${action_normalized}"
     fi
 
     # Step 3: Assert per-worktree status output.
@@ -110,24 +126,26 @@ run_case() {
         # Update mode: discover worktrees from filesystem.
         for wt_dir in "${case_playground}"/*/; do
             [[ -d "${wt_dir}" ]] || continue
-            local wt snapshot actual
+            local wt snapshot actual wt_normalized
             wt=$(basename "${wt_dir%/}")
             snapshot="${case_expected}/output.${wt}.txt"
             actual=$(cd "${wt_dir}" && bash "${CLC}" --no-color 2>&1) || true
-            check_snapshot "${case_name}/${wt}" "${snapshot}" "${actual}"
+            wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
+            check_snapshot "${case_name}/${wt}" "${snapshot}" "${wt_normalized}"
         done
     else
         # Compare mode: check only worktrees that have expected files.
         for snapshot in "${case_expected}"/output.*.txt; do
             [[ -f "${snapshot}" ]] || continue
-            local filename wt_name wt_dir actual
+            local filename wt_name wt_dir actual wt_normalized
             filename=$(basename "${snapshot}")
             [[ "${filename}" == "output.action.txt" ]] && continue
             wt_name="${filename#output.}"
             wt_name="${wt_name%.txt}"
             wt_dir="${case_playground}/${wt_name}"
             actual=$(cd "${wt_dir}" && bash "${CLC}" --no-color 2>&1) || true
-            check_snapshot "${case_name}/${wt_name}" "${snapshot}" "${actual}"
+            wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
+            check_snapshot "${case_name}/${wt_name}" "${snapshot}" "${wt_normalized}"
         done
     fi
 

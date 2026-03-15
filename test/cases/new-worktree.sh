@@ -18,6 +18,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CASE_DIR="${REPO_ROOT}/test/playground/new-worktree"
 CLC="${REPO_ROOT}/clc.sh"
 GIT="git -c user.email=clc@test -c user.name=clc-test -c commit.gpgsign=false"
+export CLC_STORE="${CASE_DIR}/.clc-store"
 
 rm -rf "${CASE_DIR}"
 mkdir -p "${CASE_DIR}"

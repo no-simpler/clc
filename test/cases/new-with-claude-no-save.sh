@@ -28,5 +28,5 @@ ${GIT} commit -q -m "Initial commit"
 
 bash "${CLC}" --no-color ignore > /dev/null
 
-# No save — storage is empty
-bash "${CLC}" --no-color new --with-claude feature
+# No save — storage is empty; should show "no saved state" message
+bash "${CLC}" --no-color new feature

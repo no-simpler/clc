@@ -1,10 +1,10 @@
-Repository
-  * ~/Developer/clc/test/playground/claude-file-states/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main   (main)
       Claude files only partially ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/claude-file-states
-    clean                                                    (feature/clean)
-    dirty                                                    (feature/dirty)
+Managed worktrees
+    clean  (feature/clean)
+    dirty  (feature/dirty)
 
 Unmanaged worktrees
   <none>

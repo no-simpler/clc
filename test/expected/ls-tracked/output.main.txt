@@ -1,8 +1,8 @@
-Repository
-  * ~/Developer/clc/test/playground/ls-tracked/main  (main) (dirty)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main  (main) (dirty)
       Claude files only partially ignored; Claude files detected
 
-Managed worktrees in ~/Developer/clc/test/playground/ls-tracked
+Managed worktrees
   <none>
 
 Unmanaged worktrees

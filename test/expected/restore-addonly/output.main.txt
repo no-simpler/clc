@@ -1,7 +1,7 @@
-Repository
-  * ~/Developer/clc/test/playground/restore-addonly/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main  (main)
 
-Managed worktrees in ~/Developer/clc/test/playground/restore-addonly
+Managed worktrees
   <none>
 
 Unmanaged worktrees

@@ -1,42 +1,48 @@
 --- path + ticket prefix stripped; branch = full first arg ---
 Created
-  ~/Developer/clc/test/playground/new-worktree/main-my-feature  (feature/PROJ-123_my-feature)
+  %%PARENT_DIR%%/main-my-feature  (feature/PROJ-123_my-feature)
 
-Repository
-  * ~/Developer/clc/test/playground/new-worktree/main  (main)
+(no saved state — run 'clc save' to save Claude files first)
+
+Repository (parent dir: %%PARENT_DIR%%)
+  * main        (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/new-worktree
-    my-feature                                         (feature/PROJ-123_my-feature)
+Managed worktrees
+    my-feature  (feature/PROJ-123_my-feature)
 
 Unmanaged worktrees
   <none>
 --- ticket prefix stripped; explicit branch override ---
 Created
-  ~/Developer/clc/test/playground/new-worktree/main-widget  (explicit-branch)
+  %%PARENT_DIR%%/main-widget  (explicit-branch)
 
-Repository
-  * ~/Developer/clc/test/playground/new-worktree/main  (main)
+(no saved state — run 'clc save' to save Claude files first)
+
+Repository (parent dir: %%PARENT_DIR%%)
+  * main        (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/new-worktree
-    my-feature                                         (feature/PROJ-123_my-feature)
-    widget                                             (explicit-branch)
+Managed worktrees
+    my-feature  (feature/PROJ-123_my-feature)
+    widget      (explicit-branch)
 
 Unmanaged worktrees
   <none>
 --- plain name; branch = name ---
 Created
-  ~/Developer/clc/test/playground/new-worktree/main-simple-task  (simple-task)
+  %%PARENT_DIR%%/main-simple-task  (simple-task)
 
-Repository
-  * ~/Developer/clc/test/playground/new-worktree/main  (main)
+(no saved state — run 'clc save' to save Claude files first)
+
+Repository (parent dir: %%PARENT_DIR%%)
+  * main         (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/new-worktree
-    my-feature                                         (feature/PROJ-123_my-feature)
-    simple-task                                        (simple-task)
-    widget                                             (explicit-branch)
+Managed worktrees
+    my-feature   (feature/PROJ-123_my-feature)
+    simple-task  (simple-task)
+    widget       (explicit-branch)
 
 Unmanaged worktrees
   <none>

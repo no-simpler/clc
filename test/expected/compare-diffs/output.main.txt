@@ -1,7 +1,7 @@
-Repository
-  * ~/Developer/clc/test/playground/compare-diffs/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main  (main)
 
-Managed worktrees in ~/Developer/clc/test/playground/compare-diffs
+Managed worktrees
   <none>
 
 Unmanaged worktrees

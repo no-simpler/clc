@@ -34,5 +34,5 @@ echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
 echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
 (cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) > /dev/null
 
-# Create new worktree with --with-claude; should auto-restore without prompt
-bash "${CLC}" --no-color new --with-claude feature
+# Create new worktree; should auto-restore without prompt (default behavior)
+bash "${CLC}" --no-color new feature

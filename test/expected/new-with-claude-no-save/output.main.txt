@@ -1,8 +1,8 @@
-Repository
-  * ~/Developer/clc/test/playground/new-with-claude-no-save/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main     (main)
 
-Managed worktrees in ~/Developer/clc/test/playground/new-with-claude-no-save
-    feature                                                       (feature)
+Managed worktrees
+    feature  (feature)
 
 Unmanaged worktrees
   <none>

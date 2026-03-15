@@ -1,5 +1,5 @@
 Created
-  ~/Developer/clc/test/playground/new-with-claude/main-feature  (feature)
+  %%PARENT_DIR%%/main-feature  (feature)
 
 Compare
   Exists in storage only:
@@ -7,11 +7,11 @@ Compare
     + CLAUDE.md
 Synchronized.
 
-Repository
-  * ~/Developer/clc/test/playground/new-with-claude/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main     (main)
 
-Managed worktrees in ~/Developer/clc/test/playground/new-with-claude
-    feature                                               (feature)
+Managed worktrees
+    feature  (feature)
 
 Unmanaged worktrees
   <none>

@@ -4,14 +4,16 @@ clc: error: worktree 'other' has uncommitted changes
 clc: error: cannot remove current worktree 'feat'
 --- rm clean peer (success) ---
 Removed
-  ~/Developer/clc/test/playground/rm/main-feat  (feat)
+  %%PARENT_DIR%%/main-feat  (feat)
+      branch deleted
+      git branch feat <sha>
 
-Repository
-  * ~/Developer/clc/test/playground/rm/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main   (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/rm
-    other                                    (other) (dirty)
+Managed worktrees
+    other  (other) (dirty)
 
 Unmanaged worktrees
   <none>

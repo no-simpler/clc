@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bash test/run.sh)"
+      "Bash(bash test/run.sh)",
+      "Bash(grep:*)"
     ]
   }
 }

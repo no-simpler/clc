@@ -1,9 +1,9 @@
-Repository
-    ~/Developer/clc/test/playground/dirty/main       (main) (dirty)
+Repository (parent dir: %%PARENT_DIR%%)
+    main       (main) (dirty)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/dirty
-  * feature                                          (feature/some-feature)
+Managed worktrees
+  * feature    (feature/some-feature)
 
 Unmanaged worktrees
-    ~/Developer/clc/test/playground/dirty/unmanaged  (<detached>) (dirty)
+    unmanaged  (<detached>) (dirty)

@@ -1,3 +1,8 @@
+--- prune --keep-branch (merged and unmerged removed, dirty skipped, branches kept) ---
+Pruned
+  - merged  (merged)
+  - unmerged  (unmerged)
+
 Repository (parent dir: %%PARENT_DIR%%)
   * main   (main)
       Claude files not ignored

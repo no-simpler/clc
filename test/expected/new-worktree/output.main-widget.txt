@@ -1,11 +1,11 @@
-Repository
-    ~/Developer/clc/test/playground/new-worktree/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+    main         (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/new-worktree
-    my-feature                                         (feature/PROJ-123_my-feature)
-    simple-task                                        (simple-task)
-  * widget                                             (explicit-branch)
+Managed worktrees
+    my-feature   (feature/PROJ-123_my-feature)
+    simple-task  (simple-task)
+  * widget       (explicit-branch)
 
 Unmanaged worktrees
   <none>

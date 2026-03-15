@@ -1,14 +1,18 @@
 --- prune (removes clean1 and clean2, skips dirty) ---
 Pruned
   - clean1  (clean1)
+      branch deleted
+      git branch clean1 <sha>
   - clean2  (clean2)
+      branch deleted
+      git branch clean2 <sha>
 
-Repository
-  * ~/Developer/clc/test/playground/prune/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main   (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/prune
-    dirty                                       (dirty) (dirty)
+Managed worktrees
+    dirty  (dirty) (dirty)
 
 Unmanaged worktrees
   <none>

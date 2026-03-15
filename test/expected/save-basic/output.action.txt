@@ -1,3 +1,3 @@
 Saved
-  ~/Developer/clc/test/playground/save-basic/.clc-store/saved/main@a3dce0d1cef8af1d0ad76de2dc89d6e4/<timestamp>
+  %%PARENT_DIR%%/.clc-store/saved/main@a3dce0d1cef8af1d0ad76de2dc89d6e4/<timestamp>
   3 file(s)

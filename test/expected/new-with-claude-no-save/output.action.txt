@@ -1,13 +1,13 @@
 Created
-  ~/Developer/clc/test/playground/new-with-claude-no-save/main-feature  (feature)
+  %%PARENT_DIR%%/main-feature  (feature)
 
 (no saved state — run 'clc save' to save Claude files first)
 
-Repository
-  * ~/Developer/clc/test/playground/new-with-claude-no-save/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main     (main)
 
-Managed worktrees in ~/Developer/clc/test/playground/new-with-claude-no-save
-    feature                                                       (feature)
+Managed worktrees
+    feature  (feature)
 
 Unmanaged worktrees
   <none>

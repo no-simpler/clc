@@ -2,11 +2,11 @@ Unignored
   - CLAUDE.md
   - /.claude/
 
-Repository
-  * ~/Developer/clc/test/playground/ignore-unignored/main  (main)
+Repository (parent dir: %%PARENT_DIR%%)
+  * main  (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/playground/ignore-unignored
+Managed worktrees
   <none>
 
 Unmanaged worktrees

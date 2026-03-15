@@ -40,4 +40,4 @@ bash "${CLC}" --no-color rm feat || true
 
 echo "--- rm clean peer (success) ---"
 cd "${CASE_DIR}/main"
-bash "${CLC}" --no-color rm feat
+bash "${CLC}" --no-color rm feat | sed -E 's/[0-9a-f]{40}/<sha>/g'
