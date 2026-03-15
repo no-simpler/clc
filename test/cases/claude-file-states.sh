@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude-file-states.sh – Exercises the four Claude-file warning states.
 #
-# Produces in test/repos/claude-file-states/:
+# Produces in test/playground/claude-file-states/:
 #   main/       – main worktree; partial local ignore (CLAUDE.md only, not /.claude/)
 #   main-dirty/ – managed peer; CLAUDE.md tracked + root .gitignore contains CLAUDE.md
 #   main-clean/ – managed peer; no Claude files, no .gitignore issues
@@ -42,7 +42,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CASE_DIR="${REPO_ROOT}/test/repos/claude-file-states"
+CASE_DIR="${REPO_ROOT}/test/playground/claude-file-states"
 GIT="git -c user.email=clc@test -c user.name=clc-test -c commit.gpgsign=false"
 
 # Idempotent cleanup of any previous run
@@ -84,11 +84,3 @@ ${GIT} commit -q -m "Add CLAUDE.md and .gitignore (bad state for demo)"
 
 git worktree add -q "${CASE_DIR}/main-clean" feature/clean
 
-# ── Summary ───────────────────────────────────────────────────────────────────
-
-echo "Repos created in ${CASE_DIR}:"
-echo "  main/       (main worktree, branch: main, partial local ignore)"
-echo "  main-dirty/ (managed peer, branch: feature/dirty, CLAUDE.md tracked + in .gitignore)"
-echo "  main-clean/ (managed peer, branch: feature/clean, no Claude files)"
-echo ""
-echo "Run: bash clc.sh from each directory and compare against expected output in this file."

@@ -6,15 +6,19 @@
 #   --update   Write actual output as the new snapshot instead of diffing.
 #   (no args)  Run all cases against committed snapshots.
 #
-# Each case script creates repos under test/repos/<case>/. The runner
-# discovers call sites by listing the directories created there, runs
-# clc.sh --no-color from each, and compares against test/expected/<case>/<dir>.txt.
+# Each case script in test/cases/<case>.sh sets up worktrees under
+# test/playground/<case>/ and optionally calls clc to produce action output.
+#
+# Snapshot conventions in test/expected/<case>/:
+#   output.action.txt        – compared against stdout of case script (optional)
+#   output.<worktree>.txt    – runner cd's into test/playground/<case>/<worktree>/,
+#                              runs clc --no-color, and compares (optional, repeatable)
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASES_DIR="${REPO_ROOT}/test/cases"
-REPOS_DIR="${REPO_ROOT}/test/repos"
+PLAYGROUND_DIR="${REPO_ROOT}/test/playground"
 EXPECTED_DIR="${REPO_ROOT}/test/expected"
 CLC="${REPO_ROOT}/clc.sh"
 
@@ -79,8 +83,7 @@ check_snapshot() {
 run_case() {
     local case_name="$1"
     local case_script="${CASES_DIR}/${case_name}.sh"
-    local action_marker="${CASES_DIR}/${case_name}.action"
-    local case_repos="${REPOS_DIR}/${case_name}"
+    local case_playground="${PLAYGROUND_DIR}/${case_name}"
     local case_expected="${EXPECTED_DIR}/${case_name}"
 
     if [[ ! -f "${case_script}" ]]; then
@@ -89,35 +92,46 @@ run_case() {
         return
     fi
 
-    if [[ -f "${action_marker}" ]]; then
-        # Action test: capture case script output directly (it runs clc internally).
-        local actual
-        actual=$(bash "${case_script}" 2>&1) || true
-        check_snapshot "${case_name}" "${case_expected}/output.txt" "${actual}"
+    # Step 1: Run case script, capture stdout and stderr.
+    local action_out
+    action_out=$(bash "${case_script}" 2>&1) || true
+
+    # Step 2: Assert action output.
+    # On --update: write if stdout is non-empty. On compare: check if file exists.
+    local action_snapshot="${case_expected}/output.action.txt"
+    if [[ ${OPT_UPDATE} -eq 1 && -n "${action_out}" ]]; then
+        check_snapshot "${case_name}/action" "${action_snapshot}" "${action_out}"
+    elif [[ -f "${action_snapshot}" ]]; then
+        check_snapshot "${case_name}/action" "${action_snapshot}" "${action_out}"
+    fi
+
+    # Step 3: Assert per-worktree status output.
+    if [[ ${OPT_UPDATE} -eq 1 ]]; then
+        # Update mode: discover worktrees from filesystem.
+        for wt_dir in "${case_playground}"/*/; do
+            [[ -d "${wt_dir}" ]] || continue
+            local wt snapshot actual
+            wt=$(basename "${wt_dir%/}")
+            snapshot="${case_expected}/output.${wt}.txt"
+            actual=$(cd "${wt_dir}" && bash "${CLC}" --no-color 2>&1) || true
+            check_snapshot "${case_name}/${wt}" "${snapshot}" "${actual}"
+        done
     else
-        # State test: suppress setup, then run clc from each worktree directory.
-        if ! bash "${case_script}" > /dev/null 2>&1; then
-            echo "[${case_name}] setup failed"
-            failed=$(( failed + 1 ))
-            rm -rf "${case_repos}"
-            return
-        fi
-
-        for site_dir in "${case_repos}"/*/; do
-            [[ -d "${site_dir}" ]] || continue
-            local site snapshot actual
-            site=$(basename "${site_dir%/}")
-            snapshot="${case_expected}/${site}.txt"
-
-            local clc_action="" cmd_file="${case_expected}/${site}.cmd"
-            [[ -f "${cmd_file}" ]] && clc_action=$(cat "${cmd_file}")
-            # shellcheck disable=SC2086
-            actual=$(cd "${site_dir}" && bash "${CLC}" --no-color ${clc_action} 2>&1) || true
-            check_snapshot "${case_name}/${site}" "${snapshot}" "${actual}"
+        # Compare mode: check only worktrees that have expected files.
+        for snapshot in "${case_expected}"/output.*.txt; do
+            [[ -f "${snapshot}" ]] || continue
+            local filename wt_name wt_dir actual
+            filename=$(basename "${snapshot}")
+            [[ "${filename}" == "output.action.txt" ]] && continue
+            wt_name="${filename#output.}"
+            wt_name="${wt_name%.txt}"
+            wt_dir="${case_playground}/${wt_name}"
+            actual=$(cd "${wt_dir}" && bash "${CLC}" --no-color 2>&1) || true
+            check_snapshot "${case_name}/${wt_name}" "${snapshot}" "${actual}"
         done
     fi
 
-    rm -rf "${case_repos}"
+    rm -rf "${case_playground}"
 }
 
 for case_name in "${cases[@]}"; do

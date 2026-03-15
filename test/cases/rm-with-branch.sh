@@ -7,7 +7,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CASE_DIR="${REPO_ROOT}/test/repos/rm-with-branch"
+CASE_DIR="${REPO_ROOT}/test/playground/rm-with-branch"
 CLC="${REPO_ROOT}/clc.sh"
 GIT="git -c user.email=clc@test -c user.name=clc-test -c commit.gpgsign=false"
 

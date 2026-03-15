@@ -34,9 +34,7 @@ Do not commit code yourself. When calling `git commit` for other reasons (e.g., 
 
 ## Verification loop
 
-Test cases live in `test/cases/`. Each case is a self-contained shell script that creates a fresh set of git repos under `test/repos/<case-name>/` (that directory is gitignored). Each case creates a sibling set of worktrees: a main repo and any peers/unmanaged worktrees as siblings inside `test/repos/<case-name>/`, following the path convention so clc can detect them correctly.
-
-`test/run.sh` is the snapshot test runner. It sets up repos for each case, runs `clc.sh --no-color` from every worktree, and diffs the output against committed snapshots in `test/expected/`.
+`test/run.sh` is the snapshot test runner. See `test/CLAUDE.md` for full details on the test system and how to add new tests.
 
 ```bash
 bash test/run.sh               # run all cases (exit 1 on any diff)
@@ -46,13 +44,3 @@ bash test/run.sh --update base # regenerate snapshots for one case
 ```
 
 When adding a feature, run `--update` after verifying the new output is correct, then commit the updated snapshots alongside the code change.
-
-The `base` case is the canonical starting point: a main worktree on `main`, one managed peer (`main-feature`, branch `feature/some-feature`), and one unmanaged worktree (detached HEAD).
-
-To create a new test case:
-
-1. Copy `test/cases/base.sh` as `test/cases/<case-name>.sh`.
-2. Change `CASE_DIR` to point at `test/repos/<case-name>`.
-3. Adjust the repo setup to match the state you want to test.
-4. Disable commit signing on any commits: `git -c commit.gpgsign=false commit ...`.
-5. Run `bash test/run.sh --update <case-name>` to generate its snapshots.

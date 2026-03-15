@@ -1,0 +1,27 @@
+--- rm -b merged (branch deleted) ---
+Removed
+  ~/Developer/clc/test/playground/rm-with-branch/main-merged  (merged)
+
+Repository
+  * ~/Developer/clc/test/playground/rm-with-branch/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/rm-with-branch
+    unmerged                                             (unmerged)
+
+Unmanaged worktrees
+  <none>
+--- rm -b unmerged (branch not deleted, warning) ---
+Removed
+  ~/Developer/clc/test/playground/rm-with-branch/main-unmerged  (unmerged)
+      branch 'unmerged' not deleted — not fully merged
+
+Repository
+  * ~/Developer/clc/test/playground/rm-with-branch/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/rm-with-branch
+  <none>
+
+Unmanaged worktrees
+  <none>

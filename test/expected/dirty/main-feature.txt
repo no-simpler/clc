@@ -1,9 +1,0 @@
-Repository
-    ~/Developer/clc/test/repos/dirty/main       (main) (dirty)
-      Claude files not ignored
-
-Managed worktrees in ~/Developer/clc/test/repos/dirty
-  * feature                                     (feature/some-feature)
-
-Unmanaged worktrees
-    ~/Developer/clc/test/repos/dirty/unmanaged  (<detached>) (dirty)

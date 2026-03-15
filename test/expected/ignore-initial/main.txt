@@ -1,9 +1,0 @@
-Repository
-  * ~/Developer/clc/test/repos/ignore-initial/main  (main)
-      Claude files not ignored
-
-Managed worktrees in ~/Developer/clc/test/repos/ignore-initial
-  <none>
-
-Unmanaged worktrees
-  <none>

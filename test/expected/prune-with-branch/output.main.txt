@@ -1,0 +1,9 @@
+Repository
+  * ~/Developer/clc/test/playground/prune-with-branch/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/prune-with-branch
+    dirty                                                   (dirty) (dirty)
+
+Unmanaged worktrees
+  <none>

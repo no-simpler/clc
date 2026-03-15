@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dirty.sh – Sets up a repo state with dirty worktrees for clc verification.
 #
-# Produces in test/repos/dirty/:
+# Produces in test/playground/dirty/:
 #   main/         – main worktree (branch: main, DIRTY – unstaged change)
 #   main-feature/ – managed peer worktree (branch: feature/some-feature, clean)
 #   unmanaged/    – unmanaged worktree (detached HEAD, DIRTY – staged change)
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CASE_DIR="${REPO_ROOT}/test/repos/dirty"
+CASE_DIR="${REPO_ROOT}/test/playground/dirty"
 
 # Idempotent cleanup of any previous run
 rm -rf "${CASE_DIR}"
@@ -17,7 +17,7 @@ mkdir -p "${CASE_DIR}"
 
 # ── Main worktree ──────────────────────────────────────────────────────────────
 
-git init "${CASE_DIR}/main"
+git init -q "${CASE_DIR}/main"
 cd "${CASE_DIR}/main"
 git checkout -q -b main
 
@@ -48,7 +48,3 @@ git -C "${CASE_DIR}/unmanaged" add staged.txt
 
 # main-feature: left clean
 
-echo "Repos created in ${CASE_DIR}:"
-echo "  main/         (main worktree, branch: main, DIRTY – unstaged)"
-echo "  main-feature/ (managed peer, branch: feature/some-feature, clean)"
-echo "  unmanaged/    (unmanaged, detached HEAD, DIRTY – staged)"

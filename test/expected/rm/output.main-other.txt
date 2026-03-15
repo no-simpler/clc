@@ -1,0 +1,9 @@
+Repository
+    ~/Developer/clc/test/playground/rm/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/rm
+  * other                                    (other) (dirty)
+
+Unmanaged worktrees
+  <none>

@@ -1,0 +1,13 @@
+Unignored
+  - CLAUDE.md
+  - /.claude/
+
+Repository
+  * ~/Developer/clc/test/playground/ignore-unignored/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/ignore-unignored
+  <none>
+
+Unmanaged worktrees
+  <none>

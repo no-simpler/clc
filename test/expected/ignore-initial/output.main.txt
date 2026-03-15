@@ -1,0 +1,9 @@
+Repository
+  * ~/Developer/clc/test/playground/ignore-initial/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/ignore-initial
+  <none>
+
+Unmanaged worktrees
+  <none>

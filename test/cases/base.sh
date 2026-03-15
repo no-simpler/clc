@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # base.sh – Sets up a baseline repo state for clc verification.
 #
-# Produces in test/repos/base/:
+# Produces in test/playground/base/:
 #   main/       – main worktree (branch: main)
 #   main-feature/ – managed peer worktree (branch: feature/some-feature)
 #   unmanaged/  – unmanaged worktree (detached HEAD)
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CASE_DIR="${REPO_ROOT}/test/repos/base"
+CASE_DIR="${REPO_ROOT}/test/playground/base"
 
 # Idempotent cleanup of any previous run
 rm -rf "${CASE_DIR}"
@@ -17,7 +17,7 @@ mkdir -p "${CASE_DIR}"
 
 # ── Main worktree ──────────────────────────────────────────────────────────────
 
-git init "${CASE_DIR}/main"
+git init -q "${CASE_DIR}/main"
 cd "${CASE_DIR}/main"
 git checkout -q -b main
 
@@ -37,7 +37,3 @@ git worktree add -q "${CASE_DIR}/main-feature" feature/some-feature
 
 git worktree add -q --detach "${CASE_DIR}/unmanaged"
 
-echo "Repos created in ${CASE_DIR}:"
-echo "  main/         (main worktree, branch: main)"
-echo "  main-feature/ (managed peer, branch: feature/some-feature)"
-echo "  unmanaged/    (unmanaged, detached HEAD)"

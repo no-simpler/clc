@@ -1,9 +1,0 @@
-Repository
-    ~/Developer/clc/test/repos/base/main       (main)
-      Claude files not ignored
-
-Managed worktrees in ~/Developer/clc/test/repos/base
-    feature                                    (feature/some-feature)
-
-Unmanaged worktrees
-  * ~/Developer/clc/test/repos/base/unmanaged  (<detached>)

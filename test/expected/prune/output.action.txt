@@ -4,11 +4,11 @@ Pruned
   - clean2  (clean2)
 
 Repository
-  * ~/Developer/clc/test/repos/prune/main  (main)
+  * ~/Developer/clc/test/playground/prune/main  (main)
       Claude files not ignored
 
-Managed worktrees in ~/Developer/clc/test/repos/prune
-    dirty                                  (dirty) (dirty)
+Managed worktrees in ~/Developer/clc/test/playground/prune
+    dirty                                       (dirty) (dirty)
 
 Unmanaged worktrees
   <none>

@@ -1,0 +1,12 @@
+Ignored
+  + CLAUDE.md
+  + /.claude/
+
+Repository
+  * ~/Developer/clc/test/playground/ignore-ignored/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/ignore-ignored
+  <none>
+
+Unmanaged worktrees
+  <none>
