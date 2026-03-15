@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-03-15
+
+### Fixed
+- `install.sh`: installation directory is now verified to be on `$PATH` before selection; `~/.local/bin` is only created when it is already referenced in `$PATH`.
+
 ## [1.0.1] - 2026-03-15
 
 ### Changed
@@ -22,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/no-simpler/clc/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/no-simpler/clc/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/no-simpler/clc/releases/tag/v1.0.0
