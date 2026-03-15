@@ -183,6 +183,17 @@ list_all_worktrees() {
     done < <(git -C "${main_worktree}" worktree list 2>/dev/null)
 }
 
+# ── Claude-file helpers ───────────────────────────────────────────────────────
+
+# Return 0 if a relative path (file or dir) in the given worktree is git-managed:
+# tracked/staged, or untracked but not ignored (visible to git).
+_claude_item_git_managed() {
+    local wt="$1" rel="${2%/}"  # strip trailing slash for git path matching
+    git -C "${wt}" ls-files -- "${rel}" 2>/dev/null | grep -q . && return 0
+    git -C "${wt}" ls-files --others --exclude-standard -- "${rel}" 2>/dev/null | grep -q . && return 0
+    return 1
+}
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 cmd_new() {
@@ -399,6 +410,46 @@ cmd_unignore() {
     cmd_status
 }
 
+cmd_ls() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                      || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                      || die "unable to determine current worktree"
+
+    # Show a transient "Searching..." prompt on TTY so the user knows work is happening.
+    # Skipped when stdout is not a TTY (pipes, test capture) — output stays clean.
+    [[ -t 1 ]] && printf "Searching..."
+
+    local -a items=()
+
+    # .claude/ at worktree root
+    [[ -d "${current_worktree}/.claude" ]] && items+=(".claude/")
+
+    # All CLAUDE.md files at any depth, sorted by path
+    while IFS= read -r abs_path; do
+        items+=("${abs_path#${current_worktree}/}")
+    done < <(find "${current_worktree}" -name "CLAUDE.md" -not -path "*/.git/*" 2>/dev/null | sort)
+
+    # Clear the "Searching..." line, then print the real header
+    [[ -t 1 ]] && printf "\r\033[K"
+    print_header "Claude files"
+
+    if [[ ${#items[@]} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}<none>${CLR_RESET}"
+        return
+    fi
+
+    for rel in "${items[@]}"; do
+        if _claude_item_git_managed "${current_worktree}" "${rel}"; then
+            printf "  %s!%s %s%s%s\n" "${CLR_WARN}" "${CLR_RESET}" "${CLR_WARN}" "${rel}" "${CLR_RESET}"
+        else
+            printf "    %s  %s(properly ignored)%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+        fi
+    done
+}
+
 cmd_status() {
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
@@ -536,6 +587,8 @@ Options:
 
 Actions:
   status                 Show repository info and managed worktrees (default)
+  ls|list                List Claude-related files in the current worktree.
+                         Files tracked or visible to git are highlighted.
   ignore                 Add Claude-related patterns to .git/info/exclude
   unignore               Remove Claude-related patterns from .git/info/exclude
   new|add <name> [<branch>]
@@ -594,6 +647,7 @@ main() {
 
     case "${action}" in
         ""|status)    cmd_status ;;
+        ls|list)      cmd_ls ;;
         ignore)       cmd_ignore ;;
         unignore)     cmd_unignore ;;
         new|add)      cmd_new "${cmd_args[@]}" ;;

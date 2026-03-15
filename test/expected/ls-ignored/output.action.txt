@@ -1,0 +1,4 @@
+Claude files
+    .claude/  (properly ignored)
+    CLAUDE.md  (properly ignored)
+    docs/CLAUDE.md  (properly ignored)

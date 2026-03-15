@@ -1,0 +1,8 @@
+Repository
+  * ~/Developer/clc/test/playground/ls-ignored/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/ls-ignored
+  <none>
+
+Unmanaged worktrees
+  <none>
