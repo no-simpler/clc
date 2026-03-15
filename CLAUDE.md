@@ -1,4 +1,6 @@
-**Claude Code Cloak (`clc`)** is a single-file bash utility (`clc.sh`) that helps obfuscate usage of Claude Code in repositories where Claude-related files cannot be committed. The goal is to work with Claude Code effectively and efficiently in any Git repository (and its subordinate worktrees) without leaving any trace of Claude Code usage in committed files.
+**Claude Code Cloak (`clc`)** is a single-file bash utility (`clc.sh`) that manages Git worktrees (for using with Claude Code) and helps obfuscate usage of Claude Code in repositories where Claude-related files cannot be committed.
+
+The goal is to enable user to work with Claude Code effectively and efficiently in any Git repository (across its worktrees), even without leaving any trace of Claude Code usage in committed files.
 
 ## Main features
 
@@ -11,7 +13,7 @@
   - Distinguishes **current worktree** as worktree from which this command was called (can be main or one of the peers).
 - Distinguishes **managed worktrees** from unmanaged ones.
   - Managed worktree is either the main worktree or a peer worktree that follows path convention.
-  - Path convention for managed peer worktree: if main worktree is at `/repos/main-repo`, managed peer peer worktree is at `/repos/main-repo-[worktree-name]`.
+  - Path convention for managed peer worktree: if main worktree is at `/repos/main-repo`, managed peer peer worktree is at `/repos/main-repo-<worktree-name>`.
   - Allows easily creating and deleting managed worktrees.
   - Allows convenience actions on worktrees.
 - Defines **Claude-related files** as:
@@ -23,30 +25,26 @@
   - Allows restoring Claude files from `~/.clc/` to current worktree.
   - Allows comparing current worktree against the latest saved state.
 
-## Storage design (`save` / `compare` / `restore`)
+## Storage design
 
-Files are saved to `~/.clc/saved/<name>@<md5>/` where `<name>` is the basename and `<md5>` is the md5 hash of the **resolved absolute path** of the **main worktree** (not the current worktree). This keys storage per repo, not per worktree.
+- Saves Claude-related files to `~/.clc/saved/<name>@<md5>/`
+  - `<name>` = basename
+  - `<md5>` = md5 hash of the **resolved absolute path** of the **main worktree** (not the current worktree).
+- Saved files are keyed by main worktree path, not current worktree.
+  - All worktrees of the same repo share one storage namespace.
+  - This is intentional: Claude files are conceptually repo-wide.
 
-Layout under the save base:
+Sample layout under the save base:
+
 ```
 ~/.clc/saved/<name>@<md5>/
-  full-path.txt          # the resolved path used for the hash (for human browsing)
-  <unix-timestamp>/      # one directory per save; timestamp = seconds since epoch
-    CLAUDE.md
+  full-path.txt          # path used for <md5> (for human browsing)
+  <unix-timestamp>/      # one directory per save
+    CLAUDE.md            # Claude-related files pulled from repo
     docs/CLAUDE.md
     .claude/settings.json
     ...
 ```
-
-Key design decisions:
-- **Keyed by main worktree path, not current worktree.** All worktrees of the same repo share one storage namespace. This is intentional: Claude files are conceptually repo-wide.
-- **`latest_save_dir` filters to numeric-only dir names** (`grep -E '^[0-9]+$'`) so `full-path.txt` and any other metadata files in the save base are never mistaken for timestamp snapshots.
-- **`_compare_claude_files` populates four globals** (`_CMP_SAME`, `_CMP_DIFFERENT`, `_CMP_ONLY_STORAGE`, `_CMP_ONLY_WORKTREE`) so both `compare` and `restore` can share comparison logic without re-running it. Reset at the top of each call.
-- **`cmd_restore` does NOT call `cmd_compare`** — it calls `_compare_claude_files` and `_print_compare_output` directly. This avoids `set -e` triggering on `cmd_compare`'s `return 1` exit code before restore can do its work.
-- **`clc ls` includes storage comparison** inline after the file list. Uses `_compare_claude_files` directly (not `cmd_compare`) so the exit code doesn't surface as an error.
-- **Suggestion line** ("Run 'clc save' to save current state; run 'clc restore' to load saved state.") is printed by both `cmd_compare` and `cmd_ls` when diffs exist, but NOT by `cmd_restore` (user is already in restore context).
-- **`CLC_STORE` is overridable via env var** for test isolation. Tests set `export CLC_STORE="${CASE_DIR}/.clc-store"` to avoid touching `~/.clc` and ensure deterministic snapshots.
-- **Bash 4+ is required** (checked at startup). `declare -A` / `local -A` for associative arrays is used in `_compare_claude_files`.
 
 ## Conventions
 
