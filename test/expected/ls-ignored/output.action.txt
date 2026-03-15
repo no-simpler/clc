@@ -2,3 +2,5 @@ Claude files
     .claude/  (properly ignored)
     CLAUDE.md  (properly ignored)
     docs/CLAUDE.md  (properly ignored)
+
+(no saved state — run 'clc save')

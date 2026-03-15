@@ -1,0 +1,10 @@
+Compare
+  Exists in storage only:
+    + .claude/settings.json
+  Different content:
+    ~ CLAUDE.md
+  Exists in worktree only:
+    - docs/CLAUDE.md
+
+Synchronize? (Data loss possible!) [y/N] 
+Synchronized.

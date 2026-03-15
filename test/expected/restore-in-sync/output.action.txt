@@ -1,0 +1,1 @@
+All 3 Claude file(s) in current worktree are in sync with storage.

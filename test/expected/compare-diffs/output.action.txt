@@ -1,0 +1,9 @@
+Compare
+  Exists in storage only:
+    + .claude/settings.json
+  Different content:
+    ~ CLAUDE.md
+  Exists in worktree only:
+    - docs/CLAUDE.md
+
+Run 'clc save' to save current state; run 'clc restore' to load saved state.

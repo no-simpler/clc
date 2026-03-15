@@ -1,0 +1,9 @@
+Repository
+  * ~/Developer/clc/test/playground/save-no-files/main  (main)
+      Claude files not ignored
+
+Managed worktrees in ~/Developer/clc/test/playground/save-no-files
+  <none>
+
+Unmanaged worktrees
+  <none>

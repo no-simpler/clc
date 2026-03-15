@@ -1,2 +1,4 @@
 Claude files
   <none>
+
+(no saved state — run 'clc save')

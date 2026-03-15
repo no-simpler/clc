@@ -1,0 +1,8 @@
+Repository
+  * ~/Developer/clc/test/playground/save-basic/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/save-basic
+  <none>
+
+Unmanaged worktrees
+  <none>

@@ -1,0 +1,8 @@
+Repository
+  * ~/Developer/clc/test/playground/compare-diffs/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/compare-diffs
+  <none>
+
+Unmanaged worktrees
+  <none>

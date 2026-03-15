@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # clc - Claude Code Cloak
 # Obfuscates Claude Code usage in repositories where Claude-related files cannot be committed.
+[[ "${BASH_VERSINFO[0]}" -lt 4 ]] && { echo "clc: error: Bash 4.0 or later required (found ${BASH_VERSION})" >&2; exit 1; }
 
 set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 CLC_VERSION="0.1.0"
-CLC_STORE="${HOME}/.clc"
+CLC_STORE="${CLC_STORE:-${HOME}/.clc}"
 
 # Claude-related files managed by clc:
 #   CLAUDE.md  – project instructions (any depth in worktree)
@@ -194,7 +195,202 @@ _claude_item_git_managed() {
     return 1
 }
 
+# ── Storage helpers ───────────────────────────────────────────────────────────
+
+# Cross-platform md5 hash of a string.
+md5_str() {
+    if command -v md5sum &>/dev/null; then
+        printf '%s' "$1" | md5sum | awk '{print $1}'
+    else
+        printf '%s' "$1" | md5 -q
+    fi
+}
+
+# Return the base save directory for a repo: ~/.clc/saved/<name>@<md5-of-path>
+repo_save_base() {
+    local resolved; resolved=$(realpath "$1")
+    echo "${CLC_STORE}/saved/$(basename "${resolved}")@$(md5_str "${resolved}")"
+}
+
+# Print relative paths of all Claude files in a directory (sorted, unique).
+collect_claude_files_in_dir() {
+    local base="$1"
+    local -a results=()
+    if [[ -d "${base}/.claude" ]]; then
+        while IFS= read -r f; do results+=("${f#${base}/}"); done \
+            < <(find "${base}/.claude" -type f 2>/dev/null | sort)
+    fi
+    while IFS= read -r f; do results+=("${f#${base}/}"); done \
+        < <(find "${base}" -name "CLAUDE.md" -not -path "*/.git/*" -type f 2>/dev/null | sort)
+    [[ ${#results[@]} -eq 0 ]] && return
+    printf '%s\n' "${results[@]}" | sort -u
+}
+
+# Return the most recent timestamp subdirectory under save_base, or empty string.
+latest_save_dir() {
+    local save_base="$1"
+    [[ -d "${save_base}" ]] || return 0
+    local latest; latest=$(ls "${save_base}" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
+    [[ -n "${latest}" ]] && echo "${save_base}/${latest}"
+}
+
+# Global arrays populated by _compare_claude_files.
+_CMP_ONLY_STORAGE=()
+_CMP_DIFFERENT=()
+_CMP_ONLY_WORKTREE=()
+_CMP_SAME=()
+
+# Populate the four _CMP_* globals by comparing worktree wt against save_dir.
+_compare_claude_files() {
+    local wt="$1" save_dir="$2"
+    _CMP_ONLY_STORAGE=()
+    _CMP_DIFFERENT=()
+    _CMP_ONLY_WORKTREE=()
+    _CMP_SAME=()
+
+    local -a wt_files=() storage_files=()
+    while IFS= read -r f; do wt_files+=("$f"); done \
+        < <(collect_claude_files_in_dir "${wt}")
+    while IFS= read -r f; do storage_files+=("$f"); done \
+        < <(collect_claude_files_in_dir "${save_dir}")
+
+    local -A wt_set storage_set
+    wt_set=(); storage_set=()
+    for f in ${wt_files[@]+"${wt_files[@]}"}; do wt_set["$f"]=1; done
+    for f in ${storage_files[@]+"${storage_files[@]}"}; do storage_set["$f"]=1; done
+
+    for f in ${storage_files[@]+"${storage_files[@]}"}; do
+        if [[ -z "${wt_set[$f]+x}" ]]; then
+            _CMP_ONLY_STORAGE+=("$f")
+        elif cmp -s "${wt}/${f}" "${save_dir}/${f}"; then
+            _CMP_SAME+=("$f")
+        else
+            _CMP_DIFFERENT+=("$f")
+        fi
+    done
+    for f in ${wt_files[@]+"${wt_files[@]}"}; do
+        if [[ -z "${storage_set[$f]+x}" ]]; then
+            _CMP_ONLY_WORKTREE+=("$f")
+        fi
+    done
+}
+
+# Print compare diff sections using the current _CMP_* globals.
+_print_compare_output() {
+    print_header "Compare"
+    if [[ ${#_CMP_ONLY_STORAGE[@]} -gt 0 ]]; then
+        echo "  Exists in storage only:"
+        for f in "${_CMP_ONLY_STORAGE[@]}"; do printf "    + %s\n" "$f"; done
+    fi
+    if [[ ${#_CMP_DIFFERENT[@]} -gt 0 ]]; then
+        echo "  Different content:"
+        for f in "${_CMP_DIFFERENT[@]}"; do printf "    ~ %s\n" "$f"; done
+    fi
+    if [[ ${#_CMP_ONLY_WORKTREE[@]} -gt 0 ]]; then
+        echo "  Exists in worktree only:"
+        for f in "${_CMP_ONLY_WORKTREE[@]}"; do printf "    - %s\n" "$f"; done
+    fi
+}
+
 # ── Commands ──────────────────────────────────────────────────────────────────
+
+cmd_save() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                         || die "unable to determine current worktree"
+
+    local save_base; save_base=$(repo_save_base "${main_worktree}")
+    local -a files=()
+    while IFS= read -r f; do files+=("$f"); done \
+        < <(collect_claude_files_in_dir "${current_worktree}")
+
+    local dest_dir="${save_base}/$(date +%s)"
+    mkdir -p "${dest_dir}"
+    # Record the full path used for the hash, for discoverability when browsing storage.
+    printf '%s\n' "$(realpath "${main_worktree}")" > "${save_base}/full-path.txt"
+    for f in ${files[@]+"${files[@]}"}; do
+        mkdir -p "$(dirname "${dest_dir}/${f}")"
+        cp "${current_worktree}/${f}" "${dest_dir}/${f}"
+    done
+
+    print_header "Saved"
+    printf "  %s\n" "$(short_path "${dest_dir}")"
+    printf "  %d file(s)\n" "${#files[@]}"
+}
+
+cmd_compare() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                         || die "unable to determine current worktree"
+
+    local save_base; save_base=$(repo_save_base "${main_worktree}")
+    local save_dir; save_dir=$(latest_save_dir "${save_base}")
+    [[ -n "${save_dir}" ]] || die "no saved state found — run 'clc save' first"
+
+    _compare_claude_files "${current_worktree}" "${save_dir}"
+    local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
+    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+
+    if [[ ${diffs} -eq 0 ]]; then
+        echo "All ${total} Claude file(s) in current worktree are in sync with storage."
+        return 0
+    fi
+
+    _print_compare_output
+    echo
+    echo "Run 'clc save' to save current state; run 'clc restore' to load saved state."
+    return 1
+}
+
+cmd_restore() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                         || die "unable to determine current worktree"
+
+    local save_base; save_base=$(repo_save_base "${main_worktree}")
+    local save_dir; save_dir=$(latest_save_dir "${save_base}")
+    [[ -n "${save_dir}" ]] || die "no saved state found — run 'clc save' first"
+
+    _compare_claude_files "${current_worktree}" "${save_dir}"
+    local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
+    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+
+    if [[ ${diffs} -eq 0 ]]; then
+        echo "All ${total} Claude file(s) in current worktree are in sync with storage."
+        return 0
+    fi
+
+    _print_compare_output
+    printf "\nSynchronize? (Data loss possible!) [y/N] "
+    read -r response || response="n"
+    echo
+
+    if [[ "${response}" =~ ^[Yy]$ ]]; then
+        for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
+            mkdir -p "$(dirname "${current_worktree}/${f}")"
+            cp "${save_dir}/${f}" "${current_worktree}/${f}"
+        done
+        for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
+            mkdir -p "$(dirname "${current_worktree}/${f}")"
+            cp "${save_dir}/${f}" "${current_worktree}/${f}"
+        done
+        for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
+            rm -f "${current_worktree}/${f}"
+        done
+        echo "Synchronized."
+    else
+        echo "Aborted."
+    fi
+}
 
 cmd_new() {
     local full_name="" branch=""
@@ -438,16 +634,34 @@ cmd_ls() {
 
     if [[ ${#items[@]} -eq 0 ]]; then
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
-        return
+    else
+        for rel in "${items[@]}"; do
+            if _claude_item_git_managed "${current_worktree}" "${rel}"; then
+                printf "  %s!%s %s%s%s\n" "${CLR_WARN}" "${CLR_RESET}" "${CLR_WARN}" "${rel}" "${CLR_RESET}"
+            else
+                printf "    %s  %s(properly ignored)%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            fi
+        done
     fi
 
-    for rel in "${items[@]}"; do
-        if _claude_item_git_managed "${current_worktree}" "${rel}"; then
-            printf "  %s!%s %s%s%s\n" "${CLR_WARN}" "${CLR_RESET}" "${CLR_WARN}" "${rel}" "${CLR_RESET}"
+    # Storage comparison
+    local save_base; save_base=$(repo_save_base "${main_worktree}")
+    local save_dir; save_dir=$(latest_save_dir "${save_base}")
+    echo
+    if [[ -z "${save_dir}" ]]; then
+        echo "${CLR_MUTED}(no saved state — run 'clc save')${CLR_RESET}"
+    else
+        _compare_claude_files "${current_worktree}" "${save_dir}"
+        local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
+        local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+        if [[ ${diffs} -eq 0 ]]; then
+            echo "All ${total} Claude file(s) are in sync with storage."
         else
-            printf "    %s  %s(properly ignored)%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            _print_compare_output
+            echo
+            echo "Run 'clc save' to save current state; run 'clc restore' to load saved state."
         fi
-    done
+    fi
 }
 
 cmd_status() {
@@ -591,6 +805,12 @@ Actions:
                          Files tracked or visible to git are highlighted.
   ignore                 Add Claude-related patterns to .git/info/exclude
   unignore               Remove Claude-related patterns from .git/info/exclude
+  save                   Save Claude-related files from the current worktree to
+                         ~/.clc/saved/<repo>/<timestamp>/
+  compare                Compare current worktree against the latest saved state.
+                         Exits 0 if in sync, 1 if differences exist.
+  restore                Restore Claude files from the latest saved state to the
+                         current worktree. Prompts before making any changes.
   new|add <name> [<branch>]
                          Create a new managed peer worktree. Worktree name
                          derived from <name>: last path component, ticket
@@ -650,6 +870,9 @@ main() {
         ls|list)      cmd_ls ;;
         ignore)       cmd_ignore ;;
         unignore)     cmd_unignore ;;
+        save)         cmd_save ;;
+        compare)      cmd_compare ;;
+        restore)      cmd_restore ;;
         new|add)      cmd_new "${cmd_args[@]}" ;;
         rm|remove)    cmd_rm "${cmd_args[@]}" ;;
         prune|clean)  cmd_prune "${cmd_args[@]}" ;;

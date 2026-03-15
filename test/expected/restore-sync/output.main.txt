@@ -1,0 +1,8 @@
+Repository
+  * ~/Developer/clc/test/playground/restore-sync/main  (main)
+
+Managed worktrees in ~/Developer/clc/test/playground/restore-sync
+  <none>
+
+Unmanaged worktrees
+  <none>
