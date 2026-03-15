@@ -47,6 +47,9 @@ chmod +x ~/.local/bin/clc
 # In any git repo — see current status
 clc
 
+# List Claude files detected in this worktree
+clc ls
+
 # Keep Claude files out of git (one-time setup per repository)
 clc ignore
 
