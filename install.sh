@@ -18,8 +18,15 @@ find_install_dir() {
         on_path["$dir"]=1
     done
 
-    # Prefer ~/.local/bin, then /usr/local/bin — only if on $PATH and writable
-    local candidates=("$HOME/.local/bin" "/usr/local/bin")
+    # Usual suspects in priority order — pick first that is on $PATH and writable
+    local candidates=(
+        "$HOME/.local/bin"
+        "$HOME/bin"
+        "/usr/local/bin"
+        "/usr/bin"
+        "/opt/local/bin"
+        "/opt/homebrew/bin"
+    )
     for dir in "${candidates[@]}"; do
         if [[ -n "${on_path[$dir]:-}" && -d "$dir" && -w "$dir" ]]; then
             echo "$dir"; return
@@ -31,13 +38,6 @@ find_install_dir() {
         mkdir -p "$HOME/.local/bin" && echo "$HOME/.local/bin"; return
     fi
 
-    # Fall back to first writable entry on $PATH (guaranteed to be on $PATH)
-    for dir in "${path_entries[@]}"; do
-        if [[ -d "$dir" && -w "$dir" ]]; then
-            echo "$dir"; return
-        fi
-    done
-
     return 1
 }
 
@@ -48,7 +48,7 @@ main() {
 
     local install_dir
     if ! install_dir=$(find_install_dir); then
-        echo "Error: no writable directory found on \$PATH." >&2
+        echo "Error: no suitable installation directory found." >&2
         echo "Create ~/.local/bin and add it to your PATH, then re-run." >&2
         exit 1
     fi
