@@ -1,5 +1,5 @@
 Saved
-  %%PARENT_DIR%%/.clc-store/saved/main@9bf3456b1588fc1cc090946a7b64ce6f/<timestamp>
+  %%PARENT_DIR%%/.clc-store/saved/main@%%MD5%%/<timestamp>
   1 file(s)
 ---
 %%PARENT_DIR%%/main

@@ -86,6 +86,7 @@ normalize_output() {
     local out="$1" parent_disp="$2" parent_abs="$3"
     out="${out//${parent_disp}/%%PARENT_DIR%%}"
     out="${out//${parent_abs}/%%PARENT_DIR%%}"
+    out=$(printf '%s' "${out}" | sed -E 's/@[0-9a-f]{32}/@%%MD5%%/g')
     printf '%s' "${out}"
 }
 
