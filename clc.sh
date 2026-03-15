@@ -506,7 +506,6 @@ cmd_rm() {
     while IFS=$'\001' read -r type row_name path branch dirty; do
         if [[ "${type}" == "peer" && "${row_name}" == "${name}" ]]; then
             wt_path="${path}"; wt_branch="${branch}"; wt_dirty="${dirty}"
-            break
         fi
     done < <(list_all_worktrees "${main_worktree}")
 
