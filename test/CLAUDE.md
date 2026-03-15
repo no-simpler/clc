@@ -30,3 +30,24 @@ Each test has three parts:
 - Silent setup calls (e.g., pre-applying `clc ignore` before testing `clc unignore`) must suppress their output: `clc --no-color ignore > /dev/null`.
 - Use `git -c commit.gpgsign=false commit` for any commits in case scripts.
 - `test/playground/` is gitignored; never commit anything from there.
+
+## Storage isolation
+
+Tests that invoke `clc ls`, `clc save`, `clc compare`, or `clc restore` must isolate storage by exporting `CLC_STORE` before any `clc` call:
+
+```bash
+export CLC_STORE="${CASE_DIR}/.clc-store"
+```
+
+This prevents tests from reading or writing `~/.clc` and ensures snapshots are deterministic across runs.
+
+## Non-deterministic output
+
+Commands that include timestamps (e.g. `clc save` prints the timestamp directory path) must be normalized before the snapshot is recorded. Pipe through sed in the case script:
+
+```bash
+(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) \
+    | sed -E 's|/[0-9]{10,}$|/<timestamp>|'
+```
+
+The pattern matches a path component of 10+ digits at end-of-line (Unix timestamps are 10 digits as of 2001 and will remain so until 2286).

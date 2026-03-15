@@ -19,12 +19,40 @@
   - `/.claude/` directory (only in the root of worktree) with all contents.
 - Manages Claude-related files only in managed worktrees.
   - Allows ignoring these files locally (via `.git/info/exclude`).
-  - Allows saving Claude files from a current worktree to `~/.clc/` (saved for per current repo).
+  - Allows saving Claude files from a current worktree to `~/.clc/` (saved per current repo).
   - Allows restoring Claude files from `~/.clc/` to current worktree.
+  - Allows comparing current worktree against the latest saved state.
+
+## Storage design (`save` / `compare` / `restore`)
+
+Files are saved to `~/.clc/saved/<name>@<md5>/` where `<name>` is the basename and `<md5>` is the md5 hash of the **resolved absolute path** of the **main worktree** (not the current worktree). This keys storage per repo, not per worktree.
+
+Layout under the save base:
+```
+~/.clc/saved/<name>@<md5>/
+  full-path.txt          # the resolved path used for the hash (for human browsing)
+  <unix-timestamp>/      # one directory per save; timestamp = seconds since epoch
+    CLAUDE.md
+    docs/CLAUDE.md
+    .claude/settings.json
+    ...
+```
+
+Key design decisions:
+- **Keyed by main worktree path, not current worktree.** All worktrees of the same repo share one storage namespace. This is intentional: Claude files are conceptually repo-wide.
+- **`latest_save_dir` filters to numeric-only dir names** (`grep -E '^[0-9]+$'`) so `full-path.txt` and any other metadata files in the save base are never mistaken for timestamp snapshots.
+- **`_compare_claude_files` populates four globals** (`_CMP_SAME`, `_CMP_DIFFERENT`, `_CMP_ONLY_STORAGE`, `_CMP_ONLY_WORKTREE`) so both `compare` and `restore` can share comparison logic without re-running it. Reset at the top of each call.
+- **`cmd_restore` does NOT call `cmd_compare`** — it calls `_compare_claude_files` and `_print_compare_output` directly. This avoids `set -e` triggering on `cmd_compare`'s `return 1` exit code before restore can do its work.
+- **`clc ls` includes storage comparison** inline after the file list. Uses `_compare_claude_files` directly (not `cmd_compare`) so the exit code doesn't surface as an error.
+- **Suggestion line** ("Run 'clc save' to save current state; run 'clc restore' to load saved state.") is printed by both `cmd_compare` and `cmd_ls` when diffs exist, but NOT by `cmd_restore` (user is already in restore context).
+- **`CLC_STORE` is overridable via env var** for test isolation. Tests set `export CLC_STORE="${CASE_DIR}/.clc-store"` to avoid touching `~/.clc` and ensure deterministic snapshots.
+- **Bash 4+ is required** (checked at startup). `declare -A` / `local -A` for associative arrays is used in `_compare_claude_files`.
 
 ## Conventions
 
 Compartmentalized code. Short, readable functions. Succinct comments where it aids readability. Aim for extendability. Industry standards for shell scripting. Human-friendly, formatted, informative output. When called without arguments, actions limited to read-only (always safe to call without arguments). Support options. Action specified as first non-option argument.
+
+Output style: section headers via `print_header`; muted secondary info via `CLR_MUTED`; warnings via `print_warning_line` / `CLR_WARN`. `--no-color` (or `NO_COLOR` env, or non-TTY stdout) disables all ANSI codes.
 
 ## Development loop
 
