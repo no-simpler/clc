@@ -1,4 +1,4 @@
-# Publish Skill
+# Publish clc
 
 Guide through a complete clc release. Follow each step in order, verifying before proceeding.
 
@@ -20,11 +20,13 @@ Both must be clean before continuing. Fix any failures first.
 Decide the new version (semver: patch for fixes, minor for new commands, major for breaking changes).
 
 Edit `CLC_VERSION` in `clc.sh` line 10:
+
 ```bash
 CLC_VERSION="X.Y.Z"
 ```
 
 Update `version` and `url` in `Formula/clc.rb` (leave `sha256` as a placeholder — it gets filled after the release upload):
+
 ```ruby
 version "X.Y.Z"
 url "https://github.com/no-simpler/clc/releases/download/vX.Y.Z/clc.sh"
