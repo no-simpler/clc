@@ -826,6 +826,7 @@ cmd_status() {
 usage() {
     cat <<EOF
 clc ${CLC_VERSION} - Claude Code Cloak
+Use Claude Code effectively in any repo — without leaving traces.
 
 Usage: clc [options] [action]
 
@@ -834,18 +835,22 @@ Options:
   -V, --version   Show version and exit
       --no-color  Disable colored output
 
-Actions:
+Actions (Inspect):
   status                 Show repository info and managed worktrees (default)
-  ls|list                List Claude-related files in the current worktree.
-                         Files tracked or visible to git are highlighted.
+  ls|list                List Claude-related files. Tracked or git-visible
+                         files are marked.
+
+Actions (Claude files):
   ignore                 Add Claude-related patterns to .git/info/exclude
   unignore               Remove Claude-related patterns from .git/info/exclude
-  save                   Save Claude-related files from the current worktree to
-                         ~/.clc/saved/<repo>/<timestamp>/
-  compare                Compare current worktree against the latest saved state.
-                         Exits 0 if in sync, 1 if differences exist.
-  restore                Restore Claude files from the latest saved state to the
-                         current worktree. Prompts before making any changes.
+  save                   Save Claude-related files from the current worktree
+                         to ~/.clc/saved/
+  compare                Compare current worktree against the latest saved
+                         state. Exits 0 if in sync, 1 if differences exist.
+  restore                Restore Claude files from the latest saved state to
+                         the current worktree. Prompts before making changes.
+
+Actions (Worktrees):
   new|add [-c] <name> [<branch>]
                          Create a new managed peer worktree. Worktree name
                          derived from <name>: last path component, ticket
@@ -869,7 +874,7 @@ Claude-related files managed by clc:
 Only managed worktrees are supported. A worktree is managed if it is the main
 worktree or a peer worktree at <parent>/<main-name>-<worktree-name>.
 
-Run 'clc' without arguments to view repository and worktree status.
+Run 'clc' without arguments for repository and worktree status.
 EOF
 }
 
