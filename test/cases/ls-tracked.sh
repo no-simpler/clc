@@ -42,4 +42,4 @@ git add -f docs/CLAUDE.md
 mkdir -p .claude
 echo "{}" > .claude/settings.json
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color ls)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color ls)

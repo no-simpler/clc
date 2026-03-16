@@ -30,4 +30,4 @@ git -C "${CASE_DIR}/main-dirty" add change.txt
 
 echo "--- prune (removes clean1 and clean2, skips dirty) ---"
 cd "${CASE_DIR}/main"
-bash "${CLC}" --no-color prune | sed -E 's/[0-9a-f]{40}/<sha>/g'
+"$BASH" "${CLC}" --no-color prune | sed -E 's/[0-9a-f]{40}/<sha>/g'

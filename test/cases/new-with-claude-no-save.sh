@@ -26,7 +26,7 @@ echo "# clc test – new-with-claude-no-save" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 # No save — storage is empty; should show "no saved state" message
-bash "${CLC}" --no-color new feature
+"$BASH" "${CLC}" --no-color new feature

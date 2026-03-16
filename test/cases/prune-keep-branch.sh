@@ -35,4 +35,4 @@ git -C "${CASE_DIR}/main-dirty" add change.txt
 
 echo "--- prune --keep-branch (merged and unmerged removed, dirty skipped, branches kept) ---"
 cd "${CASE_DIR}/main"
-bash "${CLC}" --no-color prune --keep-branch
+"$BASH" "${CLC}" --no-color prune --keep-branch

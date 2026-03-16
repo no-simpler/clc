@@ -22,5 +22,5 @@ echo "# clc test – save-no-files" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) \
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) \
     | sed -E 's|/[0-9]{10,}$|/<timestamp>|'

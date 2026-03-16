@@ -26,7 +26,7 @@ git add README.md
 ${GIT} commit -q -m "Initial commit"
 
 # Properly ignore Claude patterns
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 # Create Claude files (all ignored, so not visible to git)
 mkdir -p "${CASE_DIR}/main/.claude"
@@ -35,4 +35,4 @@ echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
 mkdir -p "${CASE_DIR}/main/docs"
 echo "# nested instructions" > "${CASE_DIR}/main/docs/CLAUDE.md"
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color ls)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color ls)

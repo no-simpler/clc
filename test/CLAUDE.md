@@ -46,7 +46,7 @@ This prevents tests from reading or writing `~/.clc` and ensures snapshots are d
 Commands that include timestamps (e.g. `clc save` prints the timestamp directory path) must be normalized before the snapshot is recorded. Pipe through sed in the case script:
 
 ```bash
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) \
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) \
     | sed -E 's|/[0-9]{10,}$|/<timestamp>|'
 ```
 

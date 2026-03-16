@@ -23,4 +23,4 @@ echo "# clc test – ignore-ignored" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color ignore)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color ignore)

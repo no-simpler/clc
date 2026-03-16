@@ -1,4 +1,4 @@
-# clc — Claude Code Cloak
+# clc — Claude Cloak
 
 > Use Claude Code effectively in any repo — without leaving traces.
 
@@ -32,7 +32,7 @@ curl -fsSL https://github.com/no-simpler/clc/releases/latest/download/clc.sh -o 
 chmod +x ~/.local/bin/clc
 ```
 
-**Requirements**: bash 4.0+, git
+**Requirements**: bash 3.2+, git
 
 ## Quick start
 

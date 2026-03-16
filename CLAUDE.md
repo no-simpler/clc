@@ -1,4 +1,4 @@
-**Claude Code Cloak (`clc`)** is a single-file bash utility (`clc.sh`) that manages Git worktrees (for using with Claude Code) and helps obfuscate usage of Claude Code in repositories where Claude-related files cannot be committed.
+**Claude Cloak (`clc`)** is a single-file bash utility (`clc.sh`) that manages Git worktrees (for using with Claude Code) and helps obfuscate usage of Claude Code in repositories where Claude-related files cannot be committed.
 
 The goal is to enable user to work with Claude Code effectively and efficiently in any Git repository (across its worktrees), even without leaving any trace of Claude Code usage in committed files.
 

@@ -22,4 +22,4 @@ echo "# clc test – ls-none" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color ls)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color ls)

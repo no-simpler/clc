@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — curl-based installer for clc (Claude Code Cloak)
+# install.sh — curl-based installer for clc (Claude Cloak)
 # Usage: curl -fsSL https://github.com/no-simpler/clc/releases/latest/download/install.sh | bash
 
 set -euo pipefail

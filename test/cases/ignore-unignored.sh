@@ -25,6 +25,6 @@ git add README.md
 ${GIT} commit -q -m "Initial commit"
 
 # Pre-apply ignore so the repo starts in ignored state (setup, silent)
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color ignore > /dev/null)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color ignore > /dev/null)
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color unignore)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color unignore)

@@ -22,7 +22,7 @@ echo "# clc test – save-basic" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 mkdir -p "${CASE_DIR}/main/.claude"
 echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
@@ -30,5 +30,5 @@ echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
 mkdir -p "${CASE_DIR}/main/docs"
 echo "# nested instructions" > "${CASE_DIR}/main/docs/CLAUDE.md"
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) \
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) \
     | sed -E 's|/[0-9]{10,}$|/<timestamp>|'

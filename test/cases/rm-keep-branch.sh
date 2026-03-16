@@ -32,7 +32,7 @@ ${GIT} -C "${CASE_DIR}/main-unmerged" commit -q -m "Unique commit"
 
 echo "--- rm --keep-branch merged (worktree removed, branch kept) ---"
 cd "${CASE_DIR}/main"
-bash "${CLC}" --no-color rm --keep-branch merged
+"$BASH" "${CLC}" --no-color rm --keep-branch merged
 
 echo "--- rm --keep-branch unmerged (worktree removed, branch kept) ---"
-bash "${CLC}" --no-color rm --keep-branch unmerged
+"$BASH" "${CLC}" --no-color rm --keep-branch unmerged

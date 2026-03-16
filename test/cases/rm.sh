@@ -32,12 +32,12 @@ git -C "${CASE_DIR}/main-other" add dirty.txt
 
 echo "--- rm dirty peer (fail: uncommitted changes) ---"
 cd "${CASE_DIR}/main"
-bash "${CLC}" --no-color rm other || true
+"$BASH" "${CLC}" --no-color rm other || true
 
 echo "--- rm current worktree (fail: current) ---"
 cd "${CASE_DIR}/main-feat"
-bash "${CLC}" --no-color rm feat || true
+"$BASH" "${CLC}" --no-color rm feat || true
 
 echo "--- rm clean peer (success) ---"
 cd "${CASE_DIR}/main"
-bash "${CLC}" --no-color rm feat | sed -E 's/[0-9a-f]{40}/<sha>/g'
+"$BASH" "${CLC}" --no-color rm feat | sed -E 's/[0-9a-f]{40}/<sha>/g'

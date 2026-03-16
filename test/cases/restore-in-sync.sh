@@ -22,7 +22,7 @@ echo "# clc test – restore-in-sync" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 mkdir -p "${CASE_DIR}/main/.claude"
 echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
@@ -31,6 +31,6 @@ mkdir -p "${CASE_DIR}/main/docs"
 echo "# nested instructions" > "${CASE_DIR}/main/docs/CLAUDE.md"
 
 # Save current state silently
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) > /dev/null
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) > /dev/null
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color restore)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color restore)

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# clc - Claude Code Cloak
-# Obfuscates Claude Code usage in repositories where Claude-related files cannot be committed.
-[[ "${BASH_VERSINFO[0]}" -lt 4 ]] && { echo "clc: error: Bash 4.0 or later required (found ${BASH_VERSION})" >&2; exit 1; }
+# clc - Claude Cloak
+# Use Claude Code effectively in any repo — without leaving traces.
 
 set -euo pipefail
 
@@ -43,7 +42,7 @@ die() { echo "clc: error: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 
 # Shorten a path by replacing $HOME prefix with ~.
-short_path() { echo "${1/#${HOME}/\~}"; }
+short_path() { echo "${1/#${HOME}/~}"; }
 
 # Print a section header with optional subtitle on the same line.
 print_header() {
@@ -174,12 +173,12 @@ list_all_worktrees() {
         [[ -n "$(git -C "${wt_path}" status --porcelain 2>/dev/null)" ]] && wt_dirty="dirty"
 
         if [[ "${wt_path}" == "${main_worktree}" ]]; then
-            printf "main\001main\001%s\001%s\001%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
+            printf "main\\002main\\002%s\\002%s\\002%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
         elif [[ "${wt_path}" == "${parent}/${base}-"* ]]; then
             local wt_name="${wt_path##*/${base}-}"
-            printf "peer\001%s\001%s\001%s\001%s\n" "${wt_name}" "${wt_path}" "${wt_branch}" "${wt_dirty}"
+            printf "peer\\002%s\\002%s\\002%s\\002%s\n" "${wt_name}" "${wt_path}" "${wt_branch}" "${wt_dirty}"
         else
-            printf "unmanaged\001\001%s\001%s\001%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
+            printf "unmanaged\\002\\002%s\\002%s\\002%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
         fi
     done < <(git -C "${main_worktree}" worktree list 2>/dev/null)
 }
@@ -248,31 +247,21 @@ _compare_claude_files() {
     _CMP_ONLY_WORKTREE=()
     _CMP_SAME=()
 
-    local -a wt_files=() storage_files=()
-    while IFS= read -r f; do wt_files+=("$f"); done \
-        < <(collect_claude_files_in_dir "${wt}")
-    while IFS= read -r f; do storage_files+=("$f"); done \
-        < <(collect_claude_files_in_dir "${save_dir}")
+    local tmp_wt tmp_storage
+    tmp_wt=$(mktemp) tmp_storage=$(mktemp)
+    collect_claude_files_in_dir "${wt}"       > "$tmp_wt"
+    collect_claude_files_in_dir "${save_dir}" > "$tmp_storage"
 
-    local -A wt_set storage_set
-    wt_set=(); storage_set=()
-    for f in ${wt_files[@]+"${wt_files[@]}"}; do wt_set["$f"]=1; done
-    for f in ${storage_files[@]+"${storage_files[@]}"}; do storage_set["$f"]=1; done
-
-    for f in ${storage_files[@]+"${storage_files[@]}"}; do
-        if [[ -z "${wt_set[$f]+x}" ]]; then
-            _CMP_ONLY_STORAGE+=("$f")
-        elif cmp -s "${wt}/${f}" "${save_dir}/${f}"; then
+    while IFS= read -r f; do _CMP_ONLY_STORAGE+=("$f"); done  < <(comm -23 "$tmp_storage" "$tmp_wt")
+    while IFS= read -r f; do _CMP_ONLY_WORKTREE+=("$f"); done < <(comm -13 "$tmp_storage" "$tmp_wt")
+    while IFS= read -r f; do
+        if cmp -s "${wt}/${f}" "${save_dir}/${f}"; then
             _CMP_SAME+=("$f")
         else
             _CMP_DIFFERENT+=("$f")
         fi
-    done
-    for f in ${wt_files[@]+"${wt_files[@]}"}; do
-        if [[ -z "${storage_set[$f]+x}" ]]; then
-            _CMP_ONLY_WORKTREE+=("$f")
-        fi
-    done
+    done < <(comm -12 "$tmp_storage" "$tmp_wt")
+    rm -f "$tmp_wt" "$tmp_storage"
 }
 
 # Apply restore from save_dir into wt using pre-populated _CMP_* globals.
@@ -503,7 +492,7 @@ cmd_rm() {
 
     # Find the peer by name.
     local wt_path="" wt_branch="" wt_dirty=""
-    while IFS=$'\001' read -r type row_name path branch dirty; do
+    while IFS=$'\002' read -r type row_name path branch dirty; do
         if [[ "${type}" == "peer" && "${row_name}" == "${name}" ]]; then
             wt_path="${path}"; wt_branch="${branch}"; wt_dirty="${dirty}"
         fi
@@ -554,11 +543,11 @@ cmd_prune() {
 
     # Collect eligible peers first so we can print "(nothing to prune)" before touching anything.
     local -a to_remove=()
-    while IFS=$'\001' read -r type name path branch dirty; do
+    while IFS=$'\002' read -r type name path branch dirty; do
         [[ "${type}" == "peer" ]]                || continue
         [[ "${path}" != "${current_worktree}" ]] || continue
         [[ -z "${dirty}" ]]                      || continue
-        to_remove+=("${name}"$'\001'"${path}"$'\001'"${branch}")
+        to_remove+=("${name}"$'\002'"${path}"$'\002'"${branch}")
     done < <(list_all_worktrees "${main_worktree}")
 
     print_header "Pruned"
@@ -567,7 +556,7 @@ cmd_prune() {
     else
         for row in "${to_remove[@]}"; do
             local r_name r_path r_branch
-            IFS=$'\001' read -r r_name r_path r_branch <<< "${row}"
+            IFS=$'\002' read -r r_name r_path r_branch <<< "${row}"
             local r_sha
             r_sha=$(git -C "${main_worktree}" rev-parse "${r_branch}" 2>/dev/null || true)
             git -C "${main_worktree}" worktree remove "${r_path}" >/dev/null 2>&1 \
@@ -742,12 +731,12 @@ cmd_status() {
     local max_peer_name_len=0
 
     local main_dirty=""
-    while IFS=$'\001' read -r type name path branch dirty; do
+    while IFS=$'\002' read -r type name path branch dirty; do
         case "${type}" in
             main)     main_branch="${branch}"; main_dirty="${dirty}" ;;
-            peer)     peer_rows+=("${name}"$'\001'"${path}"$'\001'"${branch}"$'\001'"${dirty}")
+            peer)     peer_rows+=("${name}"$'\002'"${path}"$'\002'"${branch}"$'\002'"${dirty}")
                       [[ ${#name} -gt ${max_peer_name_len} ]] && max_peer_name_len=${#name} ;;
-            unmanaged) unmanaged_rows+=("${path}"$'\001'"${branch}"$'\001'"${dirty}") ;;
+            unmanaged) unmanaged_rows+=("${path}"$'\002'"${branch}"$'\002'"${dirty}") ;;
         esac
     done < <(list_all_worktrees "${main_worktree}")
 
@@ -761,9 +750,9 @@ cmd_status() {
     local main_name; main_name=$(basename "${main_worktree}")
     local max_content_len=${#main_name}
     [[ ${max_peer_name_len} -gt ${max_content_len} ]] && max_content_len=${max_peer_name_len}
-    for row in "${unmanaged_rows[@]}"; do
+    for row in ${unmanaged_rows[@]+"${unmanaged_rows[@]}"}; do
         local u_path u_branch u_display
-        IFS=$'\001' read -r u_path u_branch <<< "${row}"
+        IFS=$'\002' read -r u_path u_branch <<< "${row}"
         if [[ "${u_path}" == "${parent_dir_abs}/"* ]]; then
             u_display="${u_path##${parent_dir_abs}/}"
         else
@@ -800,7 +789,7 @@ cmd_status() {
     else
         for row in "${peer_rows[@]}"; do
             local name path branch dirty dirty_suffix
-            IFS=$'\001' read -r name path branch dirty <<< "${row}"
+            IFS=$'\002' read -r name path branch dirty <<< "${row}"
             dirty_suffix=""
             [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
             if [[ "${path}" == "${current_worktree}" ]]; then
@@ -822,7 +811,7 @@ cmd_status() {
     else
         for row in "${unmanaged_rows[@]}"; do
             local path branch dirty dirty_suffix u_disp
-            IFS=$'\001' read -r path branch dirty <<< "${row}"
+            IFS=$'\002' read -r path branch dirty <<< "${row}"
             dirty_suffix=""
             [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
             if [[ "${path}" == "${parent_dir_abs}/"* ]]; then
@@ -846,7 +835,7 @@ cmd_status() {
 
 usage() {
     cat <<EOF
-clc ${CLC_VERSION} - Claude Code Cloak
+clc ${CLC_VERSION} - Claude Cloak
 Use Claude Code effectively in any repo — without leaving traces.
 
 Usage: clc [options] [action]
@@ -940,9 +929,9 @@ main() {
         save)         cmd_save ;;
         compare)      cmd_compare ;;
         restore)      cmd_restore ;;
-        new|add)      cmd_new "${cmd_args[@]}" ;;
-        rm|remove)    cmd_rm "${cmd_args[@]}" ;;
-        prune|clean)  cmd_prune "${cmd_args[@]}" ;;
+        new|add)      cmd_new ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        rm|remove)    cmd_rm ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        prune|clean)  cmd_prune ${cmd_args[@]+"${cmd_args[@]}"} ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac

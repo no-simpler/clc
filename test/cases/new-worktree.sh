@@ -31,10 +31,10 @@ git add README.md
 ${GIT} commit -q -m "Initial commit"
 
 echo "--- path + ticket prefix stripped; branch = full first arg ---"
-bash "${CLC}" --no-color new feature/PROJ-123_my-feature
+"$BASH" "${CLC}" --no-color new feature/PROJ-123_my-feature
 
 echo "--- ticket prefix stripped; explicit branch override ---"
-bash "${CLC}" --no-color new PROJ-456-widget explicit-branch
+"$BASH" "${CLC}" --no-color new PROJ-456-widget explicit-branch
 
 echo "--- plain name; branch = name ---"
-bash "${CLC}" --no-color new simple-task
+"$BASH" "${CLC}" --no-color new simple-task

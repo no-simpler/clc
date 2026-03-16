@@ -25,17 +25,17 @@ echo "# clc test – restore-addonly" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 # Create Claude files and save them
 mkdir -p "${CASE_DIR}/main/.claude"
 echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
 echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) > /dev/null
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) > /dev/null
 
 # Remove all Claude files from worktree — storage-only diff, no destructive ops
 rm -rf "${CASE_DIR}/main/.claude"
 rm "${CASE_DIR}/main/CLAUDE.md"
 
 # Restore should apply without prompting (no stdin needed)
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color restore)
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color restore)

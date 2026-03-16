@@ -105,11 +105,11 @@ run_case() {
     # Parent dir displayed in status output (same logic as short_path in clc.sh).
     local parent_dir_abs parent_dir_disp
     parent_dir_abs="${case_playground}"
-    parent_dir_disp="${case_playground/#${HOME}/\~}"
+    parent_dir_disp="${case_playground/#${HOME}/~}"
 
     # Step 1: Run case script, capture stdout and stderr.
     local action_out
-    action_out=$(bash "${case_script}" 2>&1) || true
+    action_out=$("$BASH" "${case_script}" 2>&1) || true
 
     # Step 2: Assert action output.
     # On --update: write if stdout is non-empty. On compare: check if file exists.
@@ -130,7 +130,7 @@ run_case() {
             local wt snapshot actual wt_normalized
             wt=$(basename "${wt_dir%/}")
             snapshot="${case_expected}/output.${wt}.txt"
-            actual=$(cd "${wt_dir}" && bash "${CLC}" --no-color 2>&1) || true
+            actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color 2>&1) || true
             wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
             check_snapshot "${case_name}/${wt}" "${snapshot}" "${wt_normalized}"
         done
@@ -144,7 +144,7 @@ run_case() {
             wt_name="${filename#output.}"
             wt_name="${wt_name%.txt}"
             wt_dir="${case_playground}/${wt_name}"
-            actual=$(cd "${wt_dir}" && bash "${CLC}" --no-color 2>&1) || true
+            actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color 2>&1) || true
             wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
             check_snapshot "${case_name}/${wt_name}" "${snapshot}" "${wt_normalized}"
         done

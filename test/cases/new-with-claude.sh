@@ -26,13 +26,13 @@ echo "# clc test – new-with-claude" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 # Save Claude files to storage
 mkdir -p "${CASE_DIR}/main/.claude"
 echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
 echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) > /dev/null
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) > /dev/null
 
 # Create new worktree; should auto-restore without prompt (default behavior)
-bash "${CLC}" --no-color new feature
+"$BASH" "${CLC}" --no-color new feature

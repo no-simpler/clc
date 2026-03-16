@@ -22,7 +22,7 @@ echo "# clc test – compare-diffs" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-bash "${CLC}" --no-color ignore > /dev/null
+"$BASH" "${CLC}" --no-color ignore > /dev/null
 
 # Initial Claude files for save snapshot
 mkdir -p "${CASE_DIR}/main/.claude"
@@ -30,7 +30,7 @@ echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
 echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
 
 # Save silently
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color save) > /dev/null
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) > /dev/null
 
 # Create all three diff categories:
 # only_storage: .claude/settings.json (remove from worktree)
@@ -41,4 +41,4 @@ echo "# MODIFIED instructions" > "${CASE_DIR}/main/CLAUDE.md"
 mkdir -p "${CASE_DIR}/main/docs"
 echo "# nested instructions" > "${CASE_DIR}/main/docs/CLAUDE.md"
 
-(cd "${CASE_DIR}/main" && bash "${CLC}" --no-color compare) || true
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color compare) || true
