@@ -36,7 +36,7 @@ die() { echo "clc: error: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 
 # Shorten a path by replacing $HOME prefix with ~.
-short_path() { echo "${1/#${HOME}/~}"; }
+short_path() { echo "${1/#${HOME}/\~}"; }
 
 # Print a section header with optional subtitle on the same line.
 print_header() {

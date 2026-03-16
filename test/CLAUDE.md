@@ -24,6 +24,17 @@ Each test has three parts:
 2. Run `bash test/run.sh --update <case>` — writes `output.action.txt` from stdout, plus `output.<worktree>.txt` for any remaining worktrees.
 3. Review, then commit.
 
+## Running against multiple Bash versions
+
+When the current machine has multiple Bash versions available (e.g. `/bin/bash` is 3.2 and a Homebrew-installed `bash` is 5.x), run the test suite against each distinct version:
+
+```bash
+/bin/bash test/run.sh
+/usr/local/bin/bash test/run.sh   # or wherever the newer version lives
+```
+
+`$BASH` is used throughout the runner and case scripts so the same version is used end-to-end for each invocation.
+
 ## Key conventions
 
 - All `clc` invocations in case scripts must use `--no-color`.
@@ -40,6 +51,14 @@ export CLC_STORE="${CASE_DIR}/.clc-store"
 ```
 
 This prevents tests from reading or writing `~/.clc` and ensures snapshots are deterministic across runs.
+
+## Path placeholders in snapshots
+
+The runner normalizes machine-specific paths before comparing against snapshots:
+
+- `%%PARENT_DIR%%` — the parent directory of the repo's managed worktrees, in `~`-shortened form. Used for **display paths** that `clc` emits via `short_path`. If `clc` fails to shorten a path, the absolute form appears in the output instead and the snapshot will not match (intentional: this is how the test detects the regression).
+- `%%PARENT_DIR_ABS%%` — same directory in absolute form, for **raw file content** that is not processed by `short_path` (e.g. `full-path.txt`).
+- `%%MD5%%` — the MD5 hash component in a storage directory name.
 
 ## Non-deterministic output
 

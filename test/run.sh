@@ -82,10 +82,23 @@ check_snapshot() {
 
 normalize_output() {
     # Replace actual parent dir path with a stable placeholder so snapshots are
-    # machine-independent. Both ${HOME}-shortened and absolute forms are replaced.
+    # machine-independent.
+    #
+    # When the parent path is under $HOME (disp != abs):
+    #   - ~-shortened form  → %%PARENT_DIR%%      (display paths via clc's short_path)
+    #   - absolute form     → %%PARENT_DIR_ABS%%  (raw file content, e.g. full-path.txt)
+    # If clc fails to shorten a display path the absolute form appears in output, which
+    # does not match %%PARENT_DIR%%, so the test correctly fails.
+    #
+    # When the parent path is not under $HOME (disp == abs): both forms are the same,
+    # so everything is replaced with %%PARENT_DIR%% and HOME-shortening is not verified.
     local out="$1" parent_disp="$2" parent_abs="$3"
-    out="${out//${parent_disp}/%%PARENT_DIR%%}"
-    out="${out//${parent_abs}/%%PARENT_DIR%%}"
+    if [[ "${parent_disp}" != "${parent_abs}" ]]; then
+        out="${out//${parent_disp}/%%PARENT_DIR%%}"
+        out="${out//${parent_abs}/%%PARENT_DIR_ABS%%}"
+    else
+        out="${out//${parent_abs}/%%PARENT_DIR%%}"
+    fi
     out=$(printf '%s' "${out}" | sed -E 's/@[0-9a-f]{32}/@%%MD5%%/g')
     printf '%s' "${out}"
 }
@@ -105,7 +118,7 @@ run_case() {
     # Parent dir displayed in status output (same logic as short_path in clc.sh).
     local parent_dir_abs parent_dir_disp
     parent_dir_abs="${case_playground}"
-    parent_dir_disp="${case_playground/#${HOME}/~}"
+    parent_dir_disp="${case_playground/#${HOME}/\~}"
 
     # Step 1: Run case script, capture stdout and stderr.
     local action_out
