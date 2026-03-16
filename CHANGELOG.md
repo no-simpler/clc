@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-16
+
+### Added
+- Bash 3.2 support: `clc` now works with macOS's built-in `/bin/bash` (3.2) out of the box, with no separate Bash installation required.
+
+### Changed
+- Removed the Bash 4.0+ version guard.
+- Replaced associative-array usage in `_compare_claude_files` (Bash 4.0+ only) with a portable `mktemp`/`comm` approach.
+- Fixed empty-array expansion under `set -u` in `main()` for Bash 3.2 compatibility.
+- Test runner and case scripts now invoke clc via `"$BASH"` to respect the active interpreter.
+- Removed dead code: unused constants (`CLC_CLAUDE_FILES`, `CLC_CLAUDE_DIRS`), unused variable (`IS_GOLDEN`), unused function (`is_managed_worktree`), and unused locals in `cmd_ignore`/`cmd_unignore`.
+- Unified `\002` field-separator style in `list_all_worktrees` to use `$'\002'` consistently with all callers.
+
 ## [1.0.3] - 2026-03-15
 
 ### Changed
@@ -32,7 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/no-simpler/clc/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/no-simpler/clc/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/no-simpler/clc/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/no-simpler/clc/compare/v1.0.0...v1.0.1
