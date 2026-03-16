@@ -805,59 +805,56 @@ cmd_status() {
 
 usage() {
     cat <<EOF
-clc ${CLC_VERSION} - Claude Cloak
+${CLR_BOLD}clc ${CLC_VERSION}${CLR_RESET} - Claude Cloak
 Use Claude Code effectively in any repo — without leaving traces.
 
-Usage: clc [options] [action]
+${CLR_BOLD}Usage:${CLR_RESET} clc [options] [action]
 
-Options:
-  -h, --help      Show this help and exit
-  -V, --version   Show version and exit
-      --no-color  Disable colored output
+${CLR_BOLD}Options:${CLR_RESET}
+  ${CLR_BOLD}-h, --help${CLR_RESET}      Show this help and exit
+  ${CLR_BOLD}-V, --version${CLR_RESET}   Show version and exit
+      ${CLR_BOLD}--no-color${CLR_RESET}  Disable colored output
 
-Actions (Inspect):
-  status                 Show repository info and managed worktrees (default)
-  ls|list                List Claude-related files. Tracked or git-visible
+${CLR_BOLD}Actions (Inspect):${CLR_RESET}
+  ${CLR_BOLD}status${CLR_RESET}                 Show repository info and managed worktrees ${CLR_MUTED}(default)${CLR_RESET}
+  ${CLR_BOLD}ls${CLR_RESET}${CLR_MUTED}|list${CLR_RESET}                List Claude files. Tracked or git-visible
                          files are marked.
 
-Actions (Claude files):
-  ignore                 Add Claude-related patterns to .git/info/exclude
-  unignore               Remove Claude-related patterns from .git/info/exclude
-  save                   Save Claude-related files from the current worktree
+${CLR_BOLD}Actions (Claude files):${CLR_RESET}
+  ${CLR_BOLD}ignore${CLR_RESET}                 Add Claude file patterns to .git/info/exclude
+  ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
+  ${CLR_BOLD}save${CLR_RESET}                   Save Claude files from the current worktree
                          to ~/.clc/saved/
-  compare                Compare current worktree against the latest saved
-                         state. Exits 0 if in sync, 1 if differences exist.
-  restore                Restore Claude files from the latest saved state to
-                         the current worktree. Prompts before making changes.
+  ${CLR_BOLD}compare${CLR_RESET}                Compare current worktree against the latest saved
+                         state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
+  ${CLR_BOLD}restore${CLR_RESET}                Restore Claude files from the latest saved state
+                         to the current worktree. Prompts before making changes.
 
-Actions (Worktrees):
-  new|add [--no-claude] <name> [<branch>]
+${CLR_BOLD}Actions (Worktrees):${CLR_RESET}
+  ${CLR_BOLD}new${CLR_RESET}${CLR_MUTED}|add${CLR_RESET} ${CLR_MUTED}[--no-claude]${CLR_RESET} <name> ${CLR_MUTED}[<branch>]${CLR_RESET}
                          Create a new managed peer worktree and restore Claude
                          files from the latest saved state. Worktree name
                          derived from <name>: last path component, ticket
-                         prefix stripped (e.g. feature/PROJ-123_foo → foo).
+                         prefix stripped ${CLR_MUTED}(e.g. feature/PROJ-123_foo → foo)${CLR_RESET}.
                          Branch defaults to <name> as-is; pass <branch> to
                          override. Checks out existing branch or creates new.
-  rm|remove [--keep-branch] <name>
+  ${CLR_BOLD}rm${CLR_RESET}${CLR_MUTED}|remove${CLR_RESET} ${CLR_MUTED}[--keep-branch]${CLR_RESET} <name>
                          Remove a managed peer worktree and delete its git
                          branch. Fails if the worktree is current or has
                          uncommitted changes.
-  prune|clean [--keep-branch]
+  ${CLR_BOLD}prune${CLR_RESET}${CLR_MUTED}|clean${CLR_RESET} ${CLR_MUTED}[--keep-branch]${CLR_RESET}
                          Remove all managed peer worktrees that are not current
                          and have no uncommitted changes. Deletes their git
                          branches by default.
 
-  --keep-branch  (rm, prune) Keep the worktree's git branch instead of
+${CLR_BOLD}Flags:${CLR_RESET}
+  ${CLR_BOLD}--keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune)${CLR_RESET} Keep the worktree's git branch instead of
                  deleting it with 'git branch -d'.
-  --no-claude    (new) Skip restoring Claude files from saved state.
+  ${CLR_BOLD}--no-claude${CLR_RESET}    ${CLR_MUTED}(new)${CLR_RESET} Skip restoring Claude files from saved state.
 
-Claude-related files managed by clc:
-  CLAUDE.md (any depth), .claude/ (worktree root only)
-
-Only managed worktrees are supported. A worktree is managed if it is the main
-worktree or a peer worktree at <parent>/<main-name>-<worktree-name>.
-
-Run 'clc' without arguments for repository and worktree status.
+${CLR_MUTED}Claude files: CLAUDE.md (any depth), .claude/ (worktree root only).
+Managed worktrees: main worktree or peer at <parent>/<main-name>-<worktree-name>.
+Run 'clc' without arguments for repository and worktree status.${CLR_RESET}
 EOF
 }
 
@@ -867,6 +864,10 @@ main() {
     local action=""
     local -a cmd_args=()
     OPT_NO_COLOR=0
+
+    # Pre-scan for --no-color so colors are ready before usage() or version output.
+    for _arg in "$@"; do [[ "$_arg" == "--no-color" ]] && OPT_NO_COLOR=1 && break; done
+    setup_color
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -889,7 +890,6 @@ main() {
     done
 
     need_cmd git
-    setup_color
 
     case "${action}" in
         ""|status)    cmd_status ;;

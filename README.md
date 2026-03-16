@@ -7,11 +7,17 @@
 
 ## Why
 
-In some repos, committing Claude-related files (`CLAUDE.md`, `.claude/`) may be undesirable. But you still want Claude Code's full capabilities: custom instructions, project context, and settings that follow you across branches.
+In some repos, committing Claude files (`CLAUDE.md`, `.claude/`) may be undesirable. But you still want Claude Code's full capabilities: custom instructions, project context, and settings that follow you across branches.
 
 `clc` solves this by managing your Claude files outside of git while keeping them available in any worktree. Save once, restore anywhere — no trace left in committed history.
 
 All `clc` actions are either non-destructive or prompt for confirmation before making changes.
+
+## Key concepts
+
+- **Repository** — a Git project tracked by a single `.git` directory. One repo, many worktrees.
+- **Worktree** — a checked-out working directory linked to a repository. Every repo has a **main worktree** (where `.git` lives); additional peer worktrees can be created with `git worktree add`. `clc` manages peer worktrees that follow its [path convention](#managed-worktrees).
+- **Claude files** — `CLAUDE.md` files (at any depth) and the `.claude/` directory (at the worktree root). These are what `clc` saves, restores, and excludes from git.
 
 ## Installation
 
@@ -74,15 +80,15 @@ clc prune # removes all clean managed worktrees
 | Command              | Description                                                         |
 | -------------------- | ------------------------------------------------------------------- |
 | `clc` / `clc status` | Show repository info and managed worktrees                          |
-| `clc ls`             | List Claude-related files. Tracked or git-visible files are marked. |
+| `clc ls`             | List Claude files. Tracked or git-visible files are marked. |
 
 ### Claude files
 
 | Command        | Description                                                                |
 | -------------- | -------------------------------------------------------------------------- |
-| `clc ignore`   | Add Claude-related patterns to `.git/info/exclude`                         |
-| `clc unignore` | Remove Claude-related patterns from `.git/info/exclude`                    |
-| `clc save`     | Save Claude-related files from the current worktree to `~/.clc/saved/`     |
+| `clc ignore`   | Add Claude file patterns to `.git/info/exclude`                            |
+| `clc unignore` | Remove Claude file patterns from `.git/info/exclude`                       |
+| `clc save`     | Save Claude files from the current worktree to `~/.clc/saved/`     |
 | `clc compare`  | Compare current worktree against the latest saved state (exit 0 = in sync) |
 | `clc restore`  | Restore Claude files from the latest saved state. Prompts before changes.  |
 
@@ -97,13 +103,6 @@ clc prune # removes all clean managed worktrees
 **Flags**: `--keep-branch` (rm, prune) keeps the git branch instead of deleting it. `--no-claude` (new) skips restoring Claude files after creation.
 
 ## How it works
-
-### Claude-related files
-
-`clc` manages two kinds of files:
-
-- `CLAUDE.md` — at any depth within the worktree
-- `.claude/` — only at the worktree root
 
 ### Managed worktrees
 
