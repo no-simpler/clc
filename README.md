@@ -1,6 +1,6 @@
 # clc — Claude Cloak
 
-> Use Claude Code effectively in any repo — without leaving traces.
+> Use Claude Code across Git worktrees without leaving traces.
 
 [![Latest Release](https://img.shields.io/github/v/release/no-simpler/clc)](https://github.com/no-simpler/clc/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -21,7 +21,15 @@ All `clc` actions are either non-destructive or prompt for confirmation before m
 
 ## Installation
 
-### curl installer (recommended)
+### Homebrew (recommended)
+
+```bash
+brew install no-simpler/tap/clc
+```
+
+To upgrade later: `brew upgrade clc`
+
+### curl installer
 
 ```bash
 curl -fsSL https://github.com/no-simpler/clc/releases/latest/download/install.sh | bash
@@ -77,9 +85,9 @@ clc prune # removes all clean managed worktrees
 
 ### Inspect
 
-| Command              | Description                                                         |
-| -------------------- | ------------------------------------------------------------------- |
-| `clc` / `clc status` | Show repository info and managed worktrees                          |
+| Command              | Description                                                 |
+| -------------------- | ----------------------------------------------------------- |
+| `clc` / `clc status` | Show repository info and managed worktrees                  |
 | `clc ls`             | List Claude files. Tracked or git-visible files are marked. |
 
 ### Claude files
@@ -88,7 +96,7 @@ clc prune # removes all clean managed worktrees
 | -------------- | -------------------------------------------------------------------------- |
 | `clc ignore`   | Add Claude file patterns to `.git/info/exclude`                            |
 | `clc unignore` | Remove Claude file patterns from `.git/info/exclude`                       |
-| `clc save`     | Save Claude files from the current worktree to `~/.clc/saved/`     |
+| `clc save`     | Save Claude files from the current worktree to `~/.clc/saved/`             |
 | `clc compare`  | Compare current worktree against the latest saved state (exit 0 = in sync) |
 | `clc restore`  | Restore Claude files from the latest saved state. Prompts before changes.  |
 

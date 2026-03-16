@@ -66,7 +66,31 @@ gh release create vX.Y.Z clc.sh install.sh \
     --generate-notes
 ```
 
-### 8. Verify
+### 8. Update Homebrew tap
+
+Compute the SHA256 of the release tarball and generate a self-contained shell script for the user to copy-paste and run:
+
+```bash
+SHA=$(curl -sL https://github.com/no-simpler/clc/archive/refs/tags/vX.Y.Z.tar.gz \
+  | shasum -a 256 | cut -d' ' -f1)
+```
+
+Then output the following block with `X.Y.Z` and `$SHA` substituted:
+
+```
+Run this to update the Homebrew tap:
+
+  TAPDIR=$(mktemp -d) \
+  && git clone git@github.com:no-simpler/homebrew-tap.git "$TAPDIR" \
+  && sed -i '' 's|refs/tags/v[0-9.]*\.tar\.gz|refs/tags/vX.Y.Z.tar.gz|' "$TAPDIR/Formula/clc.rb" \
+  && sed -i '' 's/sha256 ".*"/sha256 "<SHA256>"/' "$TAPDIR/Formula/clc.rb" \
+  && git -C "$TAPDIR" add Formula/clc.rb \
+  && git -C "$TAPDIR" commit -m "Update clc to vX.Y.Z" \
+  && git -C "$TAPDIR" push \
+  && rm -rf "$TAPDIR"
+```
+
+### 9. Verify
 
 Confirm the release is live and the version is correct:
 
