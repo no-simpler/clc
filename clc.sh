@@ -9,12 +9,6 @@ set -euo pipefail
 CLC_VERSION="1.0.3"
 CLC_STORE="${CLC_STORE:-${HOME}/.clc}"
 
-# Claude-related files managed by clc:
-#   CLAUDE.md  – project instructions (any depth in worktree)
-#   .claude/   – settings, memory, commands (worktree root only)
-CLC_CLAUDE_FILES=("CLAUDE.md")
-CLC_CLAUDE_DIRS=(".claude")
-
 # ── Color / style ─────────────────────────────────────────────────────────────
 
 # Populated by setup_color(); empty strings when color is disabled.
@@ -134,17 +128,6 @@ git_current_worktree() {
 
 # ── Managed-worktree helpers ──────────────────────────────────────────────────
 
-# Return 0 if the given worktree path is managed, 1 otherwise.
-# Managed = IS the main worktree, OR follows <parent>/<main-name>-<suffix>.
-is_managed_worktree() {
-    local wt_path="$1" main_worktree="$2"
-    [[ "${wt_path}" == "${main_worktree}" ]] && return 0
-    local parent base
-    parent=$(dirname "${main_worktree}")
-    base=$(basename "${main_worktree}")
-    [[ "${wt_path}" == "${parent}/${base}-"* ]]
-}
-
 # List all worktrees for the repo.
 # Prints tab-separated lines: <type>\t<name>\t<path>\t<branch>
 # type   = "main" | "peer" | "unmanaged"
@@ -173,12 +156,12 @@ list_all_worktrees() {
         [[ -n "$(git -C "${wt_path}" status --porcelain 2>/dev/null)" ]] && wt_dirty="dirty"
 
         if [[ "${wt_path}" == "${main_worktree}" ]]; then
-            printf "main\\002main\\002%s\\002%s\\002%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
+            printf '%s\n' "main"$'\002'"main"$'\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
         elif [[ "${wt_path}" == "${parent}/${base}-"* ]]; then
             local wt_name="${wt_path##*/${base}-}"
-            printf "peer\\002%s\\002%s\\002%s\\002%s\n" "${wt_name}" "${wt_path}" "${wt_branch}" "${wt_dirty}"
+            printf '%s\n' "peer"$'\002'"${wt_name}"$'\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
         else
-            printf "unmanaged\\002\\002%s\\002%s\\002%s\n" "${wt_path}" "${wt_branch}" "${wt_dirty}"
+            printf '%s\n' "unmanaged"$'\002\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
         fi
     done < <(git -C "${main_worktree}" worktree list 2>/dev/null)
 }
@@ -579,12 +562,8 @@ cmd_prune() {
 }
 
 cmd_ignore() {
-    local main_gitdir main_worktree current_worktree
-    main_gitdir=$(git_main_gitdir)         || die "not inside a Git repository"
-    main_worktree=$(git_main_worktree "${main_gitdir}") \
-                                           || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                           || die "unable to determine current worktree"
+    local main_gitdir
+    main_gitdir=$(git_main_gitdir) || die "not inside a Git repository"
 
     local exclude_file="${main_gitdir}/info/exclude"
     mkdir -p "${main_gitdir}/info"
@@ -610,12 +589,8 @@ cmd_ignore() {
 }
 
 cmd_unignore() {
-    local main_gitdir main_worktree current_worktree
-    main_gitdir=$(git_main_gitdir)         || die "not inside a Git repository"
-    main_worktree=$(git_main_worktree "${main_gitdir}") \
-                                           || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                           || die "unable to determine current worktree"
+    local main_gitdir
+    main_gitdir=$(git_main_gitdir) || die "not inside a Git repository"
 
     local exclude_file="${main_gitdir}/info/exclude"
     local -a removed=()
@@ -712,11 +687,6 @@ cmd_status() {
     claude_files_tracked   "${current_worktree}"     && state_tracked=1
     state_ignore=$(claude_local_ignore_state "${main_gitdir}")
     claude_in_gitignore    "${current_worktree}"     && state_gitignore=1
-
-    # Global golden-state flag (used by future commands).
-    IS_GOLDEN=0
-    [[ ${state_tracked} -eq 0 && "${state_ignore}" == "yes" && ${state_gitignore} -eq 0 ]] \
-        && IS_GOLDEN=1
 
     # Warning buckets: main-worktree-level vs current-worktree-level.
     local -a main_warnings=() cur_warnings=()
