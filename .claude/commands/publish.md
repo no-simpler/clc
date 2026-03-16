@@ -19,6 +19,12 @@ Both must be clean before continuing. Fix any failures first.
 
 In `CHANGELOG.md`, add a new `## [X.Y.Z] - YYYY-MM-DD` section below `## [Unreleased]`. Move any entries from `[Unreleased]` into it, or write the notable changes manually. Leave an empty `## [Unreleased]` section at the top for future changes. Add a comparison link at the bottom following the existing pattern.
 
+**CHANGELOG writing guidelines:**
+- Write from the user's perspective: describe what they can now do, what changed in their experience, or what was broken and is now fixed — not what the code does internally.
+- Good: "Fixed a crash when running `clc save` on a repo with no commits."
+- Bad: "Refactored save function to handle empty HEAD ref."
+- Strictly internal changes (refactors, code cleanup, test improvements) that have no user-visible impact should be omitted or noted only briefly under an `Internal` or `Maintenance` sub-heading.
+
 ### 3. Bump version
 
 Decide the new version (semver: patch for fixes, minor for new commands, major for breaking changes).
