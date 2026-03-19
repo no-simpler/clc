@@ -1,6 +1,6 @@
 # clc — Claude Cloak
 
-> Use Claude Code across Git worktrees without leaving traces.
+> Use Claude Code across worktrees without leaving traces.
 
 [![Latest Release](https://img.shields.io/github/v/release/no-simpler/clc)](https://github.com/no-simpler/clc/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

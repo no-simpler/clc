@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # clc - Claude Cloak
-# Use Claude Code across Git worktrees without leaving traces.
+# Use Claude Code across worktrees without leaving traces.
 
 set -euo pipefail
 
@@ -806,7 +806,7 @@ cmd_status() {
 usage() {
     cat <<EOF
 ${CLR_BOLD}clc ${CLC_VERSION}${CLR_RESET} - Claude Cloak
-Use Claude Code across Git worktrees without leaving traces.
+Use Claude Code across worktrees without leaving traces.
 
 ${CLR_BOLD}Usage:${CLR_RESET} clc [options] [action]
 
