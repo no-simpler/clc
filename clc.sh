@@ -354,6 +354,46 @@ cmd_compare() {
     return 1
 }
 
+cmd_diff() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                         || die "unable to determine current worktree"
+
+    local save_base; save_base=$(repo_save_base "${main_worktree}")
+    local save_dir; save_dir=$(latest_save_dir "${save_base}")
+    [[ -n "${save_dir}" ]] || die "no saved state found — run 'clc save' first"
+
+    _compare_claude_files "${current_worktree}" "${save_dir}"
+    local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
+    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+
+    if [[ ${diffs} -eq 0 ]]; then
+        echo "All ${total} Claude file(s) in current worktree are in sync with storage."
+        return 0
+    fi
+
+    local -a git_color=()
+    [[ "${OPT_NO_COLOR}" -eq 1 ]] && git_color=("--no-color")
+
+    # Only in storage: file was deleted from worktree — show as deletion
+    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
+        git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" /dev/null || true
+    done
+    # Different content: show storage → worktree delta
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
+        git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" "${current_worktree}/${f}" || true
+    done
+    # Only in worktree: new file not yet saved — show as addition
+    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
+        git diff --no-index ${git_color[@]+"${git_color[@]}"} -- /dev/null "${current_worktree}/${f}" || true
+    done
+
+    return 1
+}
+
 cmd_restore() {
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
@@ -827,6 +867,8 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          to ~/.clc/saved/
   ${CLR_BOLD}compare${CLR_RESET}                Compare current worktree against the latest saved
                          state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
+  ${CLR_BOLD}diff${CLR_RESET}                   Like compare, but prints a full Git diff for all
+                         mismatches. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
   ${CLR_BOLD}restore${CLR_RESET}                Restore Claude files from the latest saved state
                          to the current worktree. Prompts before making changes.
 
@@ -898,6 +940,7 @@ main() {
         unignore)     cmd_unignore ;;
         save)         cmd_save ;;
         compare)      cmd_compare ;;
+        diff)         cmd_diff ;;
         restore)      cmd_restore ;;
         new|add)      cmd_new ${cmd_args[@]+"${cmd_args[@]}"} ;;
         rm|remove)    cmd_rm ${cmd_args[@]+"${cmd_args[@]}"} ;;

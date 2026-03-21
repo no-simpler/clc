@@ -1,0 +1,21 @@
+diff --git a<save>/.claude/settings.json b<save>/.claude/settings.json
+deleted file mode 100644
+index 0967ef4..0000000
+--- a<save>/.claude/settings.json
++++ /dev/null
+@@ -1 +0,0 @@
+-{}
+diff --git a<save>/CLAUDE.md b<wt>/CLAUDE.md
+index 256aba7..52b8520 100644
+--- a<save>/CLAUDE.md
++++ b<wt>/CLAUDE.md
+@@ -1 +1 @@
+-# project instructions
++# MODIFIED instructions
+diff --git a<wt>/docs/CLAUDE.md b<wt>/docs/CLAUDE.md
+new file mode 100644
+index 0000000..7c914b2
+--- /dev/null
++++ b<wt>/docs/CLAUDE.md
+@@ -0,0 +1 @@
++# nested instructions
