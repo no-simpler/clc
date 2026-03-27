@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-27
+
+### Added
+- New `pull` command: rebases a peer worktree's branch onto the current branch, then stages the diff so you can review and commit. Use `-c` to commit immediately.
+- New `close` command: like `pull`, but also removes the peer worktree afterwards. Use `-k` to keep the branch, `-c` to auto-commit.
+- New `--no-gpg` flag: suppresses GPG commit signing for commands that create commits (`pull -c`, `close -c`).
+
+### Maintenance
+- Fixed a CI test flake caused by environment-dependent `git rerere` output.
+
 ## [1.2.0] - 2026-03-21
 
 ### Added
@@ -58,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/no-simpler/clc/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/no-simpler/clc/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/no-simpler/clc/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/no-simpler/clc/compare/v1.0.3...v1.1.0
