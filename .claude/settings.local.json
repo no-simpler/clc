@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(bash test/run.sh)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(ls *)"
     ]
   }
 }

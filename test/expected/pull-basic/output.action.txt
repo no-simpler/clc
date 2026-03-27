@@ -1,0 +1,5 @@
+Pulled
+  feat → main
+  1 file(s) staged
+
+Changes are staged. Review with 'git diff --cached', then commit when ready.

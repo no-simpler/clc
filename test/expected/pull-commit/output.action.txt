@@ -1,0 +1,7 @@
+Pulled
+  feat → main
+  1 file(s) staged
+
+[main <sha>] Squashed commit of the following:
+ 1 file changed, 1 insertion(+)
+ create mode 100644 feature.txt

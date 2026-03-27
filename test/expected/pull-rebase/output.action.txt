@@ -1,0 +1,9 @@
+Rebasing
+  feat onto main
+
+Pulled
+  feat → main
+  Rebased onto main
+  1 file(s) staged
+
+Changes are staged. Review with 'git diff --cached', then commit when ready.

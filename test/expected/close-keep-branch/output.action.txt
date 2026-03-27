@@ -1,0 +1,12 @@
+Pulled
+  feat → main
+  1 file(s) staged
+
+Removed
+  %%PARENT_DIR%%/main-feat  (feat)
+
+Changes are staged. Review with 'git diff --cached', then commit when ready.
+--- worktree removed? ---
+yes
+--- branch still exists? ---
+yes

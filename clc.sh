@@ -36,7 +36,7 @@ die() { echo "clc: error: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 
 # Shorten a path by replacing $HOME prefix with ~.
-short_path() { echo "${1/#${HOME}/\~}"; }
+short_path() { echo "~${1#${HOME}}"; }
 
 # Print a section header with optional subtitle on the same line.
 print_header() {
@@ -422,7 +422,7 @@ cmd_new() {
     local opt_no_claude=0 full_name="" branch=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --no-claude) opt_no_claude=1 ;;
+            -n|--no-claude) opt_no_claude=1 ;;
             -*) die "unknown option for 'new': $1" ;;
             *)  if   [[ -z "${full_name}" ]]; then full_name="$1"
                 elif [[ -z "${branch}"    ]]; then branch="$1"
@@ -431,7 +431,7 @@ cmd_new() {
         esac
         shift
     done
-    [[ -n "${full_name}" ]] || die "usage: clc new [--no-claude] <name> [<branch>]"
+    [[ -n "${full_name}" ]] || die "usage: clc new [-n|--no-claude] <name> [<branch>]"
 
     # Derive worktree name: last slash-component, then strip leading ticket prefix.
     local name="${full_name##*/}"
@@ -496,7 +496,7 @@ cmd_rm() {
     local opt_keep_branch=0 name=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --keep-branch) opt_keep_branch=1 ;;
+            -k|--keep-branch) opt_keep_branch=1 ;;
             -*) die "unknown option for 'rm': $1" ;;
             *)  if [[ -z "${name}" ]]; then name="$1"
                 else die "unexpected argument: $1"
@@ -504,7 +504,7 @@ cmd_rm() {
         esac
         shift
     done
-    [[ -n "${name}" ]] || die "usage: clc rm [--keep-branch] <name>"
+    [[ -n "${name}" ]] || die "usage: clc rm [-k|--keep-branch] <name>"
 
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
@@ -550,7 +550,7 @@ cmd_prune() {
     local opt_keep_branch=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --keep-branch) opt_keep_branch=1 ;;
+            -k|--keep-branch) opt_keep_branch=1 ;;
             -*) die "unknown option for 'prune': $1" ;;
             *)  die "unexpected argument: $1" ;;
         esac
@@ -841,6 +841,182 @@ cmd_status() {
     fi
 }
 
+# ── Transplant ────────────────────────────────────────────────────────────────
+
+# Internal helper for pull/close. Performs sanity checks, optional rebase, and
+# merge --squash.  Sets _PULL_WT_PATH, _PULL_WT_BRANCH, _PULL_FILE_COUNT for
+# the caller.  Does NOT commit or remove.
+_do_pull() {
+    local cmd="$1" name="$2"
+
+    # ── resolve context ──────────────────────────────────────────────────
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)                              || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}")         || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree)                    || die "unable to determine current worktree"
+
+    # ── sanity checks (all read-only, no mutations) ──────────────────────
+    # 1. Must be in main worktree.
+    [[ "${current_worktree}" == "${main_worktree}" ]] \
+        || die "must be run from the main worktree (currently in '$(short_path "${current_worktree}")')"
+
+    # 2. Find peer by name.
+    local wt_path="" wt_branch="" wt_dirty=""
+    while IFS=$'\002' read -r type row_name path branch dirty; do
+        if [[ "${type}" == "peer" && "${row_name}" == "${name}" ]]; then
+            wt_path="${path}"; wt_branch="${branch}"; wt_dirty="${dirty}"
+        fi
+    done < <(list_all_worktrees "${main_worktree}")
+    [[ -n "${wt_path}" ]]   || die "no managed peer worktree named '${name}'"
+
+    # 3. Main worktree is clean.
+    [[ -z "$(git -C "${main_worktree}" status --porcelain)" ]] \
+        || die "main worktree has uncommitted changes — commit or stash first"
+
+    # 4. Peer worktree is clean.
+    [[ -z "${wt_dirty}" ]]  || die "worktree '${name}' has uncommitted changes — commit first"
+
+    # 5. Peer is not on a detached HEAD.
+    [[ -n "${wt_branch}" && "${wt_branch}" != "(detached)" ]] \
+        || die "peer '${name}' is on a detached HEAD"
+
+    # 6. Resolve branches and verify relationship.
+    local primary_branch primary_tip peer_tip merge_base
+    primary_branch=$(git -C "${main_worktree}" symbolic-ref --short HEAD)
+    primary_tip=$(git -C "${main_worktree}" rev-parse HEAD)
+    peer_tip=$(git -C "${main_worktree}" rev-parse "${wt_branch}")
+
+    merge_base=$(git -C "${main_worktree}" merge-base "${primary_tip}" "${wt_branch}" 2>/dev/null) \
+        || die "branches '${primary_branch}' and '${wt_branch}' share no common history"
+
+    # 7. Something to transplant.
+    [[ "${primary_tip}" != "${peer_tip}" ]] \
+        || die "nothing to transplant — '${wt_branch}' is identical to '${primary_branch}'"
+
+    # ── step 1: rebase peer if needed ────────────────────────────────────
+    local did_rebase=0
+    if [[ "${merge_base}" != "${primary_tip}" ]]; then
+        print_header "Rebasing"
+        printf "  %s onto %s\n\n" "${wt_branch}" "${primary_branch}"
+        local rebase_out
+        if rebase_out=$(git -c commit.gpgsign=false -C "${wt_path}" rebase "${primary_branch}" 2>&1); then
+            : # success — output suppressed
+        else
+            git -C "${wt_path}" rebase --abort 2>/dev/null || true
+            printf "%s\n\n" "${rebase_out}"
+            die "rebase failed due to conflicts — both worktrees are clean.
+To proceed manually:
+
+  cd $(short_path "${wt_path}") && git rebase ${primary_branch}
+  # resolve conflicts, then: git rebase --continue
+
+  cd $(short_path "${main_worktree}") && clc ${cmd} ${name}"
+        fi
+        did_rebase=1
+    fi
+
+    # ── step 2: transplant via merge --squash ────────────────────────────
+    git -C "${main_worktree}" merge --squash "${wt_branch}" >/dev/null 2>&1 \
+        || die "merge --squash failed unexpectedly"
+
+    local file_count
+    file_count=$(git -C "${main_worktree}" diff --cached --name-only | wc -l | tr -d ' ')
+
+    print_header "Pulled"
+    printf "  %s → %s\n" "${wt_branch}" "${primary_branch}"
+    if [[ ${did_rebase} -eq 1 ]]; then
+        printf "  %sRebased onto %s%s\n" "${CLR_MUTED}" "${primary_branch}" "${CLR_RESET}"
+    fi
+    printf "  %s file(s) staged\n" "${file_count}"
+
+    # Export state for callers.
+    _PULL_WT_PATH="${wt_path}"
+    _PULL_WT_BRANCH="${wt_branch}"
+    _PULL_FILE_COUNT="${file_count}"
+}
+
+cmd_pull() {
+    local opt_commit=0 name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -c|--commit) opt_commit=1 ;;
+            -*) die "unknown option for 'pull': $1" ;;
+            *)  if [[ -z "${name}" ]]; then name="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+    [[ -n "${name}" ]] || die "usage: clc pull [-c|--commit] <name>"
+
+    _do_pull "pull" "${name}"
+
+    if [[ ${opt_commit} -eq 1 ]]; then
+        echo
+        if ! git -c commit.gpgsign=false commit; then
+            echo
+            die "commit aborted — changes remain staged"
+        fi
+    else
+        echo
+        echo "Changes are staged. Review with 'git diff --cached', then commit when ready."
+    fi
+}
+
+cmd_close() {
+    local opt_commit=0 opt_keep_branch=0 name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -c|--commit)     opt_commit=1 ;;
+            -k|--keep-branch) opt_keep_branch=1 ;;
+            -*) die "unknown option for 'close': $1" ;;
+            *)  if [[ -z "${name}" ]]; then name="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+    [[ -n "${name}" ]] || die "usage: clc close [-c|--commit] [-k|--keep-branch] <name>"
+
+    _do_pull "close" "${name}"
+
+    if [[ ${opt_commit} -eq 1 ]]; then
+        echo
+        if ! git -c commit.gpgsign=false commit; then
+            echo
+            die "commit aborted — worktree '${name}' not removed"
+        fi
+    fi
+
+    # Remove worktree (same pattern as cmd_rm).
+    local main_gitdir main_worktree
+    main_gitdir=$(git_main_gitdir)
+    main_worktree=$(git_main_worktree "${main_gitdir}")
+
+    git -C "${main_worktree}" worktree remove "${_PULL_WT_PATH}" >/dev/null 2>&1 \
+        || die "failed to remove worktree '${name}'"
+    [[ -d "${_PULL_WT_PATH}" ]] && rm -rf "${_PULL_WT_PATH}"
+
+    echo
+    print_header "Removed"
+    printf "  %s  %s(%s)%s\n" "$(short_path "${_PULL_WT_PATH}")" "${CLR_MUTED}" "${_PULL_WT_BRANCH}" "${CLR_RESET}"
+    if [[ ${opt_keep_branch} -eq 0 ]]; then
+        local branch_sha
+        branch_sha=$(git -C "${main_worktree}" rev-parse "${_PULL_WT_BRANCH}" 2>/dev/null || true)
+        if git -C "${main_worktree}" branch -D "${_PULL_WT_BRANCH}" >/dev/null 2>&1; then
+            printf "      %sbranch deleted%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+            printf "      %sgit branch %s %s%s\n" "${CLR_MUTED}" "${_PULL_WT_BRANCH}" "${branch_sha}" "${CLR_RESET}"
+        else
+            print_warning_line "branch '${_PULL_WT_BRANCH}' not deleted"
+        fi
+    fi
+
+    if [[ ${opt_commit} -eq 0 ]]; then
+        echo
+        echo "Changes are staged. Review with 'git diff --cached', then commit when ready."
+    fi
+}
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -873,26 +1049,38 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          to the current worktree. Prompts before making changes.
 
 ${CLR_BOLD}Actions (Worktrees):${CLR_RESET}
-  ${CLR_BOLD}new${CLR_RESET}${CLR_MUTED}|add${CLR_RESET} ${CLR_MUTED}[--no-claude]${CLR_RESET} <name> ${CLR_MUTED}[<branch>]${CLR_RESET}
+  ${CLR_BOLD}new${CLR_RESET}${CLR_MUTED}|add${CLR_RESET} ${CLR_MUTED}[-n|--no-claude]${CLR_RESET} <name> ${CLR_MUTED}[<branch>]${CLR_RESET}
                          Create a new managed peer worktree and restore Claude
                          files from the latest saved state. Worktree name
                          derived from <name>: last path component, ticket
                          prefix stripped ${CLR_MUTED}(e.g. feature/PROJ-123_foo → foo)${CLR_RESET}.
                          Branch defaults to <name> as-is; pass <branch> to
                          override. Checks out existing branch or creates new.
-  ${CLR_BOLD}rm${CLR_RESET}${CLR_MUTED}|remove${CLR_RESET} ${CLR_MUTED}[--keep-branch]${CLR_RESET} <name>
+  ${CLR_BOLD}rm${CLR_RESET}${CLR_MUTED}|remove${CLR_RESET} ${CLR_MUTED}[-k|--keep-branch]${CLR_RESET} <name>
                          Remove a managed peer worktree and delete its git
                          branch. Fails if the worktree is current or has
                          uncommitted changes.
-  ${CLR_BOLD}prune${CLR_RESET}${CLR_MUTED}|clean${CLR_RESET} ${CLR_MUTED}[--keep-branch]${CLR_RESET}
+  ${CLR_BOLD}prune${CLR_RESET}${CLR_MUTED}|clean${CLR_RESET} ${CLR_MUTED}[-k|--keep-branch]${CLR_RESET}
                          Remove all managed peer worktrees that are not current
                          and have no uncommitted changes. Deletes their git
                          branches by default.
 
+${CLR_BOLD}Actions (Transplant):${CLR_RESET}
+  ${CLR_BOLD}pull${CLR_RESET} ${CLR_MUTED}[-c|--commit]${CLR_RESET} <name>
+                         Transplant all changes from a peer worktree's branch
+                         onto the current (primary) branch as staged changes.
+                         Rebases the peer branch if needed. Must be run from
+                         the main worktree.
+  ${CLR_BOLD}close${CLR_RESET} ${CLR_MUTED}[-c|--commit] [-k|--keep-branch]${CLR_RESET} <name>
+                         Same as pull, then removes the peer worktree and
+                         deletes its branch (like rm).
+
 ${CLR_BOLD}Flags:${CLR_RESET}
-  ${CLR_BOLD}--keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune)${CLR_RESET} Keep the worktree's git branch instead of
-                 deleting it with 'git branch -d'.
-  ${CLR_BOLD}--no-claude${CLR_RESET}    ${CLR_MUTED}(new)${CLR_RESET} Skip restoring Claude files from saved state.
+  ${CLR_BOLD}-k, --keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune, close)${CLR_RESET} Keep the worktree's git branch
+                     instead of deleting it.
+  ${CLR_BOLD}-n, --no-claude${CLR_RESET}    ${CLR_MUTED}(new)${CLR_RESET} Skip restoring Claude files from saved state.
+  ${CLR_BOLD}-c, --commit${CLR_RESET}       ${CLR_MUTED}(pull, close)${CLR_RESET} Commit immediately after staging
+                     (opens editor with pre-populated message).
 
 ${CLR_MUTED}Claude files: CLAUDE.md (any depth), .claude/ (worktree root only).
 Managed worktrees: main worktree or peer at <parent>/<main-name>-<worktree-name>.
@@ -945,6 +1133,8 @@ main() {
         new|add)      cmd_new ${cmd_args[@]+"${cmd_args[@]}"} ;;
         rm|remove)    cmd_rm ${cmd_args[@]+"${cmd_args[@]}"} ;;
         prune|clean)  cmd_prune ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        pull)         cmd_pull ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        close)        cmd_close ${cmd_args[@]+"${cmd_args[@]}"} ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac

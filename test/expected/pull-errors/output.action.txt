@@ -1,0 +1,10 @@
+--- pull from peer worktree (fail: not main) ---
+clc: error: must be run from the main worktree (currently in '%%PARENT_DIR%%/main-clean')
+--- pull unknown peer (fail: not found) ---
+clc: error: no managed peer worktree named 'nonexistent'
+--- pull dirty peer (fail: uncommitted) ---
+clc: error: worktree 'dirty' has uncommitted changes — commit first
+--- pull with dirty main (fail: uncommitted) ---
+clc: error: main worktree has uncommitted changes — commit or stash first
+--- pull identical branch (fail: nothing to transplant) ---
+clc: error: nothing to transplant — 'same' is identical to 'main'

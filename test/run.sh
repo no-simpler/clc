@@ -118,7 +118,7 @@ run_case() {
     # Parent dir displayed in status output (same logic as short_path in clc.sh).
     local parent_dir_abs parent_dir_disp
     parent_dir_abs="${case_playground}"
-    parent_dir_disp="${case_playground/#${HOME}/\~}"
+    parent_dir_disp="~${case_playground#${HOME}}"
 
     # Step 1: Run case script, capture stdout and stderr.
     local action_out

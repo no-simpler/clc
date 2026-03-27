@@ -1,0 +1,9 @@
+Repository (parent dir: %%PARENT_DIR%%)
+    main  (main) (dirty)
+      Claude files not ignored
+
+Managed worktrees
+  * feat  (feat)
+
+Unmanaged worktrees
+  <none>

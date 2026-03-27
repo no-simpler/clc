@@ -1,0 +1,25 @@
+Rebasing
+  feat onto main
+
+Rebasing (1/1)Auto-merging shared.txt
+CONFLICT (content): Merge conflict in shared.txt
+error: could not apply <sha>... Peer modifies shared.txt
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+Recorded preimage for 'shared.txt'
+Could not apply <sha>... # Peer modifies shared.txt
+
+clc: error: rebase failed due to conflicts — both worktrees are clean.
+To proceed manually:
+
+  cd %%PARENT_DIR%%/main-feat && git rebase main
+  # resolve conflicts, then: git rebase --continue
+
+  cd %%PARENT_DIR%%/main && clc pull feat
+--- main clean? ---
+0
+--- peer clean? ---
+0
