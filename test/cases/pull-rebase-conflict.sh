@@ -33,7 +33,7 @@ git add shared.txt
 ${GIT} commit -q -m "Primary modifies shared.txt"
 
 # Pull — rebase should conflict, abort, and print instructions.
-"$BASH" "${CLC}" --no-color pull feat 2>&1 \
+"$BASH" "${CLC}" --no-color --no-gpg pull feat 2>&1 \
     | sed -E 's/[0-9a-f]{7,}/<sha>/g' \
     || true
 

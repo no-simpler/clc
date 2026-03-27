@@ -27,7 +27,7 @@ ${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Add feature"
 
 # Close with --keep-branch.
 cd "${CASE_DIR}/main"
-"$BASH" "${CLC}" --no-color close --keep-branch feat
+"$BASH" "${CLC}" --no-color --no-gpg close --keep-branch feat
 
 # Verify worktree is gone but branch remains.
 echo "--- worktree removed? ---"

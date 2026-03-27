@@ -143,7 +143,7 @@ run_case() {
             local wt snapshot actual wt_normalized
             wt=$(basename "${wt_dir%/}")
             snapshot="${case_expected}/output.${wt}.txt"
-            actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color 2>&1) || true
+            actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color --no-gpg 2>&1) || true
             wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
             check_snapshot "${case_name}/${wt}" "${snapshot}" "${wt_normalized}"
         done
@@ -157,7 +157,7 @@ run_case() {
             wt_name="${filename#output.}"
             wt_name="${wt_name%.txt}"
             wt_dir="${case_playground}/${wt_name}"
-            actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color 2>&1) || true
+            actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color --no-gpg 2>&1) || true
             wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
             check_snapshot "${case_name}/${wt_name}" "${snapshot}" "${wt_normalized}"
         done

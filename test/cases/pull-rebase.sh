@@ -33,4 +33,4 @@ git add other.txt
 ${GIT} commit -q -m "Advance primary"
 
 # Pull — should rebase peer first.
-"$BASH" "${CLC}" --no-color pull feat
+"$BASH" "${CLC}" --no-color --no-gpg pull feat

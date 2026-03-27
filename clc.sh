@@ -899,7 +899,7 @@ _do_pull() {
         print_header "Rebasing"
         printf "  %s onto %s\n\n" "${wt_branch}" "${primary_branch}"
         local rebase_out
-        if rebase_out=$(git -c commit.gpgsign=false -C "${wt_path}" rebase "${primary_branch}" 2>&1); then
+        if rebase_out=$(git ${GIT_SIGN[@]+"${GIT_SIGN[@]}"} -C "${wt_path}" rebase "${primary_branch}" 2>&1); then
             : # success — output suppressed
         else
             git -C "${wt_path}" rebase --abort 2>/dev/null || true
@@ -953,7 +953,7 @@ cmd_pull() {
 
     if [[ ${opt_commit} -eq 1 ]]; then
         echo
-        if ! git -c commit.gpgsign=false commit; then
+        if ! git ${GIT_SIGN[@]+"${GIT_SIGN[@]}"} commit; then
             echo
             die "commit aborted — changes remain staged"
         fi
@@ -982,7 +982,7 @@ cmd_close() {
 
     if [[ ${opt_commit} -eq 1 ]]; then
         echo
-        if ! git -c commit.gpgsign=false commit; then
+        if ! git ${GIT_SIGN[@]+"${GIT_SIGN[@]}"} commit; then
             echo
             die "commit aborted — worktree '${name}' not removed"
         fi
@@ -1030,6 +1030,7 @@ ${CLR_BOLD}Options:${CLR_RESET}
   ${CLR_BOLD}-h, --help${CLR_RESET}      Show this help and exit
   ${CLR_BOLD}-V, --version${CLR_RESET}   Show version and exit
       ${CLR_BOLD}--no-color${CLR_RESET}  Disable colored output
+      ${CLR_BOLD}--no-gpg${CLR_RESET}    Suppress GPG commit signing
 
 ${CLR_BOLD}Actions (Inspect):${CLR_RESET}
   ${CLR_BOLD}status${CLR_RESET}                 Show repository info and managed worktrees ${CLR_MUTED}(default)${CLR_RESET}
@@ -1094,16 +1095,29 @@ main() {
     local action=""
     local -a cmd_args=()
     OPT_NO_COLOR=0
+    OPT_NO_GPG=0
 
-    # Pre-scan for --no-color so colors are ready before usage() or version output.
-    for _arg in "$@"; do [[ "$_arg" == "--no-color" ]] && OPT_NO_COLOR=1 && break; done
+    # Pre-scan for --no-color / --no-gpg so globals are ready before usage() or
+    # any git command.
+    for _arg in "$@"; do
+        case "$_arg" in
+            --no-color) OPT_NO_COLOR=1 ;;
+            --no-gpg)   OPT_NO_GPG=1 ;;
+        esac
+    done
     setup_color
+
+    # When --no-gpg is passed, suppress GPG commit signing on git commands that
+    # create commits (rebase, commit).  Empty array when signing is allowed.
+    GIT_SIGN=()
+    [[ "${OPT_NO_GPG}" -eq 1 ]] && GIT_SIGN=("-c" "commit.gpgsign=false")
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)    usage; exit 0 ;;
             -V|--version) echo "clc ${CLC_VERSION}"; exit 0 ;;
             --no-color)   OPT_NO_COLOR=1 ;;
+            --no-gpg)     OPT_NO_GPG=1 ;;
             -*)           if [[ -n "${action}" ]]; then
                               cmd_args+=("$1")
                           else

@@ -27,7 +27,7 @@ ${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Add feature"
 
 # Close from main worktree.
 cd "${CASE_DIR}/main"
-"$BASH" "${CLC}" --no-color close feat | sed -E 's/[0-9a-f]{40}/<sha>/g'
+"$BASH" "${CLC}" --no-color --no-gpg close feat | sed -E 's/[0-9a-f]{40}/<sha>/g'
 
 # Verify worktree directory is gone.
 echo "--- worktree removed? ---"

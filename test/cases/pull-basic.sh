@@ -28,4 +28,4 @@ ${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Add feature"
 
 # Pull from main worktree.
 cd "${CASE_DIR}/main"
-"$BASH" "${CLC}" --no-color pull feat
+"$BASH" "${CLC}" --no-color --no-gpg pull feat

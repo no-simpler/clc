@@ -38,6 +38,7 @@ When the current machine has multiple Bash versions available (e.g. `/bin/bash` 
 ## Key conventions
 
 - All `clc` invocations in case scripts must use `--no-color`.
+- All `clc` invocations that trigger commit-creating actions (`pull`, `close`) must also use `--no-gpg`.
 - Silent setup calls (e.g., pre-applying `clc ignore` before testing `clc unignore`) must suppress their output: `clc --no-color ignore > /dev/null`.
 - Use `git -c commit.gpgsign=false commit` for any commits in case scripts.
 - `test/playground/` is gitignored; never commit anything from there.

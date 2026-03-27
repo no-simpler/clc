@@ -27,7 +27,7 @@ ${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Add feature"
 
 # Close with --commit (auto-accept editor).
 cd "${CASE_DIR}/main"
-GIT_EDITOR=true "$BASH" "${CLC}" --no-color close -c feat \
+GIT_EDITOR=true "$BASH" "${CLC}" --no-color --no-gpg close -c feat \
     | sed -E 's/[0-9a-f]{7,}/<sha>/g'
 
 # Verify commit was made (2 commits now: initial + squash).
