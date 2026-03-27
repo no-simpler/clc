@@ -92,11 +92,13 @@ Run this to update the Homebrew tap:
 
 ### 9. Verify
 
-Confirm the release is live and the version is correct:
+Download the release asset to a temp location, confirm the version, then clean up:
 
 ```bash
-curl -fsSL https://github.com/no-simpler/clc/releases/latest/download/install.sh | bash
-clc --version
+TMPFILE=$(mktemp)
+curl -fsSL https://github.com/no-simpler/clc/releases/download/vX.Y.Z/clc.sh -o "$TMPFILE"
+bash "$TMPFILE" --version
+rm "$TMPFILE"
 ```
 
 Confirm the version printed matches vX.Y.Z.
