@@ -73,6 +73,13 @@ clc new tree-name some/specific/branch-name # (worktree `tree-name`, Git branch 
 # Check if Claude files in your current worktree are in sync with the saved state
 clc compare
 
+# Pull changes from a peer worktree into the current branch (must be in main worktree)
+clc pull my-feature        # stages changes for review
+clc pull -c my-feature     # stages and commits
+
+# Pull changes and remove the worktree in one step
+clc close my-feature
+
 # Safely discard worktree and its branch (rejects destructive actions)
 clc rm my-feature
 clc rm short-name
@@ -98,6 +105,7 @@ clc prune # removes all clean managed worktrees
 | `clc unignore` | Remove Claude file patterns from `.git/info/exclude`                       |
 | `clc save`     | Save Claude files from the current worktree to `~/.clc/saved/`             |
 | `clc compare`  | Compare current worktree against the latest saved state (exit 0 = in sync) |
+| `clc diff`     | Like compare, but prints a full unified diff for all mismatches.           |
 | `clc restore`  | Restore Claude files from the latest saved state. Prompts before changes.  |
 
 ### Worktrees
@@ -108,7 +116,14 @@ clc prune # removes all clean managed worktrees
 | `clc rm [--keep-branch] <name>`           | Remove a managed peer worktree and its branch.                           |
 | `clc prune [--keep-branch]`               | Remove all clean, non-current managed peer worktrees and their branches. |
 
-**Flags**: `--keep-branch` (rm, prune) keeps the git branch instead of deleting it. `--no-claude` (new) skips restoring Claude files after creation.
+### Transplant
+
+| Command                                          | Description                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `clc pull [--commit] <name>`                     | Transplant all changes from a peer worktree's branch onto the current branch as staged changes.  |
+| `clc close [--commit] [--keep-branch] <name>`    | Same as pull, then removes the peer worktree and deletes its branch.                             |
+
+**Flags**: `--keep-branch` (rm, prune, close) keeps the git branch instead of deleting it. `--no-claude` (new) skips restoring Claude files after creation. `--commit` (pull, close) commits immediately after staging. `--no-gpg` suppresses GPG commit signing.
 
 ## How it works
 
