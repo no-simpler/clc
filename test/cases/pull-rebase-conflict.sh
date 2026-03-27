@@ -35,6 +35,7 @@ ${GIT} commit -q -m "Primary modifies shared.txt"
 # Pull — rebase should conflict, abort, and print instructions.
 "$BASH" "${CLC}" --no-color --no-gpg pull feat 2>&1 \
     | sed -E 's/[0-9a-f]{7,}/<sha>/g' \
+    | grep -v '^Recorded preimage for ' \
     || true
 
 # Verify both worktrees are clean after abort.
