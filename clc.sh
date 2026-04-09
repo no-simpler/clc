@@ -223,14 +223,15 @@ collect_claude_files_in_dir() {
 }
 
 # Find CLAUDE.md files in a directory, excluding .git internals and submodule directories.
+# Uses -prune so find never descends into excluded dirs (faster in repos with large submodules).
 _find_claude_md_files() {
     local base="$1"
-    local -a excludes=()
+    local -a prune=(-name ".git")
     while IFS= read -r sm_path; do
-        [[ -n "${sm_path}" ]] && excludes+=(-not -path "${base}/${sm_path}/*")
+        [[ -n "${sm_path}" ]] && prune+=(-o -path "${base}/${sm_path}")
     done < <(git -C "${base}" submodule status --recursive 2>/dev/null | awk '{print $2}')
-    find "${base}" -name "CLAUDE.md" -not -path "*/.git/*" \
-        ${excludes[@]+"${excludes[@]}"} -type f 2>/dev/null | sort
+    find "${base}" \( "${prune[@]}" \) -prune -o \
+        -name "CLAUDE.md" -type f -print 2>/dev/null | sort
 }
 
 # Return the most recent timestamp subdirectory under save_base, or empty string.
