@@ -1,0 +1,22 @@
+=== save from submodule ===
+Saved
+  %%PARENT_DIR%%/.clc-store/saved/sub@%%MD5%%/<timestamp>
+  1 file(s)
+
+=== save from parent ===
+Saved
+  %%PARENT_DIR%%/.clc-store/saved/parent@%%MD5%%/<timestamp>
+  2 file(s)
+
+=== ls from submodule ===
+Claude files
+    CLAUDE.md  (properly ignored)
+
+All 1 Claude file(s) are in sync with storage.
+
+=== ls from parent ===
+Claude files
+    CLAUDE.md  (properly ignored)
+    docs/CLAUDE.md  (properly ignored)
+
+All 2 Claude file(s) are in sync with storage.

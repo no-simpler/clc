@@ -116,9 +116,23 @@ git_main_gitdir() {
 }
 
 # Absolute path of the main worktree root given its .git directory path.
+# For submodules the gitdir lives inside the parent's .git/modules/, so
+# dirname would be wrong.  core.worktree in the gitdir config points back
+# to the real working directory; regular repos don't set it, so dirname
+# remains the fallback.
 git_main_worktree() {
     local main_gitdir="$1"
-    dirname "${main_gitdir}"
+    local worktree
+    worktree=$(git config -f "${main_gitdir}/config" core.worktree 2>/dev/null)
+    if [[ -n "${worktree}" ]]; then
+        # core.worktree may be relative to the gitdir
+        if [[ "${worktree}" != /* ]]; then
+            worktree="${main_gitdir}/${worktree}"
+        fi
+        realpath "${worktree}"
+    else
+        dirname "${main_gitdir}"
+    fi
 }
 
 # Absolute path of the current worktree root (the worktree $PWD belongs to).
@@ -203,9 +217,20 @@ collect_claude_files_in_dir() {
             < <(find "${base}/.claude" -type f 2>/dev/null | sort)
     fi
     while IFS= read -r f; do results+=("${f#${base}/}"); done \
-        < <(find "${base}" -name "CLAUDE.md" -not -path "*/.git/*" -type f 2>/dev/null | sort)
+        < <(_find_claude_md_files "${base}")
     [[ ${#results[@]} -eq 0 ]] && return
     printf '%s\n' "${results[@]}" | sort -u
+}
+
+# Find CLAUDE.md files in a directory, excluding .git internals and submodule directories.
+_find_claude_md_files() {
+    local base="$1"
+    local -a excludes=()
+    while IFS= read -r sm_path; do
+        [[ -n "${sm_path}" ]] && excludes+=(-not -path "${base}/${sm_path}/*")
+    done < <(git -C "${base}" submodule status --recursive 2>/dev/null | awk '{print $2}')
+    find "${base}" -name "CLAUDE.md" -not -path "*/.git/*" \
+        ${excludes[@]+"${excludes[@]}"} -type f 2>/dev/null | sort
 }
 
 # Return the most recent timestamp subdirectory under save_base, or empty string.
@@ -676,7 +701,7 @@ cmd_ls() {
     # All CLAUDE.md files at any depth, sorted by path
     while IFS= read -r abs_path; do
         items+=("${abs_path#${current_worktree}/}")
-    done < <(find "${current_worktree}" -name "CLAUDE.md" -not -path "*/.git/*" 2>/dev/null | sort)
+    done < <(_find_claude_md_files "${current_worktree}")
 
     # Clear the "Searching..." line, then print the real header
     [[ -t 1 ]] && printf "\r\033[K"
