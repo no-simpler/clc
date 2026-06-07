@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-06-07
+
+### Changed
+- The managed second brain now respects your project's ignore intent: brain files matched by an in-repo `.gitignore` (at any depth — e.g. a dependency's `vendor/…/CLAUDE.md`) or by your global excludes (e.g. the per-machine `.claude/settings.local.json`) are kept out of the store and backups. clc still disregards only its *own* `.git/info/exclude` patterns, so your actual brain is stored as before. This corrects both v1 (which captured everything) and the 2.0.1 "capture-all" behavior.
+
 ## [2.0.1] - 2026-06-07
 
 ### Fixed
@@ -152,7 +157,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/no-simpler/clc/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/no-simpler/clc/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/no-simpler/clc/compare/v1.4.1...v2.0.0
 [1.4.1]: https://github.com/no-simpler/clc/compare/v1.4.0...v1.4.1

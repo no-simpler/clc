@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="2.0.1"
+CLC_VERSION="2.0.2"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
