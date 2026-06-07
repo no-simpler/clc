@@ -53,6 +53,10 @@ export CLC_STORE="${CASE_DIR}/.clc-store"
 
 This prevents tests from reading or writing `~/.clc` and ensures snapshots are deterministic across runs.
 
+## XDG isolation
+
+The runner also isolates the XDG base dirs per case. Before each case runs, `run_case()` exports `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` under `test/playground/<case>/.xdg/` (auto-cleaned by the per-case `rm -rf`). This applies to both the case-script subprocess and the direct `clc` invocations in the runner, so clc's v2 config/data/state (`config`, the git-backed store, locks/logs) never touch the real `~/.config`, `~/.local/share`, or `~/.local/state`. Cases that need a stable path in their asserted output may still override `XDG_CONFIG_HOME` to a fixed subpath (see `config-roundtrip.sh`).
+
 ## Path placeholders in snapshots
 
 The runner normalizes machine-specific paths before comparing against snapshots:

@@ -115,6 +115,38 @@ run_case() {
         return
     fi
 
+    # Isolate XDG dirs under the per-case playground so clc's v2 config/data/
+    # state never touch the real ~/.config, ~/.local. Auto-cleaned by the
+    # rm -rf "${case_playground}" at the end of this function. Applies to both
+    # the case-script subprocess and the direct clc invocations below.
+    export XDG_CONFIG_HOME="${case_playground}/.xdg/config"
+    export XDG_DATA_HOME="${case_playground}/.xdg/data"
+    export XDG_STATE_HOME="${case_playground}/.xdg/state"
+
+    # Isolating XDG_CONFIG_HOME hides the user's global git config (~/.config/git/
+    # config), so git would lose its configured identity — commit-creating commands
+    # (clc close/pull) would then emit git's "name/email configured automatically"
+    # warning. Pin a deterministic global git identity (with signing off) via a
+    # fixture global config so those commits stay snapshot-stable. Case scripts
+    # already pin identity for their own commits via -c; this covers the commits
+    # clc itself makes.
+    #
+    # The fixture lives OUTSIDE the per-case playground (as a sibling) because case
+    # scripts begin with `rm -rf "${CASE_DIR}"`, which would otherwise delete a
+    # fixture placed under the playground mid-run, leaving GIT_CONFIG_GLOBAL pointing
+    # at a missing file (git would then fall back to the real ~/.config). It is
+    # removed in the final cleanup below.
+    local case_gitconfig="${case_playground}.gitconfig"
+    mkdir -p "$(dirname "${case_gitconfig}")"
+    printf '%s\n' \
+        '[user]' \
+        '	name = clc-test' \
+        '	email = clc@test' \
+        '[commit]' \
+        '	gpgsign = false' > "${case_gitconfig}"
+    export GIT_CONFIG_GLOBAL="${case_gitconfig}"
+    export GIT_CONFIG_SYSTEM=/dev/null
+
     # Parent dir displayed in status output (same logic as short_path in clc.sh).
     local parent_dir_abs parent_dir_disp
     parent_dir_abs="${case_playground}"
@@ -163,7 +195,7 @@ run_case() {
         done
     fi
 
-    rm -rf "${case_playground}"
+    rm -rf "${case_playground}" "${case_gitconfig}"
 }
 
 for case_name in "${cases[@]}"; do

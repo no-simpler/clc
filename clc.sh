@@ -7,6 +7,9 @@ set -euo pipefail
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 CLC_VERSION="1.4.1"
+# Explicit CLC_STORE env override (captured before the legacy default is applied).
+# When set, it overrides the v2 data/store root (back-compat + test isolation).
+CLC_STORE_OVERRIDE="${CLC_STORE:-}"
 CLC_STORE="${CLC_STORE:-${HOME}/.clc}"
 
 # ── Color / style ─────────────────────────────────────────────────────────────
@@ -47,6 +50,26 @@ print_header() {
         echo "${CLR_BOLD}${heading}${CLR_RESET}"
     fi
 }
+
+
+# ── Config / XDG ──────────────────────────────────────────────────────────────
+
+# v2 XDG-based locations. CLC_STORE (if set in env) overrides the data root.
+clc_config_dir() { echo "${XDG_CONFIG_HOME:-${HOME}/.config}/clc"; }
+clc_data_dir()   { echo "${CLC_STORE_OVERRIDE:-${XDG_DATA_HOME:-${HOME}/.local/share}/clc}"; }
+clc_state_dir()  { echo "${XDG_STATE_HOME:-${HOME}/.local/state}/clc"; }
+
+# Path to the v2 config file (git-config format).
+clc_config_file() { echo "$(clc_config_dir)/config"; }
+
+# Read a config value; empty (and success) when missing — safe under set -e.
+config_get() { git config -f "$(clc_config_file)" "$@" 2>/dev/null || true; }
+
+# Write a config value; creates the config dir on demand.
+config_set() { mkdir -p "$(clc_config_dir)"; git config -f "$(clc_config_file)" "$@"; }
+
+# List all config entries; empty when the file is absent.
+config_list() { git config -f "$(clc_config_file)" --list 2>/dev/null || true; }
 
 
 # ── Claude-file state detection ───────────────────────────────────────────────
@@ -1180,4 +1203,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
