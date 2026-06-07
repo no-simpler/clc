@@ -107,6 +107,11 @@ store_init() {
     git -C "${store}" config user.name "clc"
     git -C "${store}" config user.email "clc@localhost"
     git -C "${store}" config commit.gpgsign false
+    # The store mirrors the full brain (collect_claude_files_in_dir defines it),
+    # so it must NOT honor the user's global gitignore (core.excludesfile / the
+    # XDG ~/.config/git/ignore fallback) — otherwise globally-ignored brain files
+    # like .claude/settings.local.json would be silently dropped from the store.
+    git -C "${store}" config core.excludesfile /dev/null
 
     mkdir -p "${store}/.clc"
     printf '%s\n' \
@@ -224,14 +229,17 @@ store_sync_project() {
         [[ -n "${f}" ]] || continue
         mkdir -p "$(dirname "${S}/${f}")"
         cp "${wt}/${f}" "${S}/${f}"
-        git -C "${store}" add -- "${S}/${f}"
+        # -f: the store mirrors the full brain regardless of the user's gitignore
+        # (e.g. a globally-ignored .claude/settings.local.json must still be stored).
+        git -C "${store}" add -f -- "${S}/${f}"
     done < "${Ftmp}"
     rm -f "${Ftmp}"
 
-    # Belt-and-suspenders, subtree-scoped ONLY. Tolerate a vanished subtree
-    # (empty-brain case: the explicit git rm above already removed it) — git
-    # would otherwise emit "fatal: pathspec … did not match any files" to stderr.
-    git -C "${store}" add -A -- "${rel}" 2>/dev/null || true
+    # Belt-and-suspenders, subtree-scoped ONLY (-f for the same reason as above).
+    # Tolerate a vanished subtree (empty-brain case: the explicit git rm above
+    # already removed it) — git would otherwise emit "fatal: pathspec … did not
+    # match any files" to stderr.
+    git -C "${store}" add -fA -- "${rel}" 2>/dev/null || true
 
     if git -C "${store}" diff --cached --quiet -- "${rel}"; then
         _STORE_SYNC_RESULT="noop"; return 0
@@ -252,13 +260,23 @@ CLC_HOOK_BEGIN="# >>> clc managed >>>"
 CLC_HOOK_END="# <<< clc managed <<<"
 CLC_HOOKS="post-commit post-merge post-checkout"
 
-# Resolve the absolute path of the running clc script ONCE. Baked into the hook
-# line (robust in git's minimal-PATH hook environment; hooks are local/.git,
-# never committed).
+# Resolve the absolute path of the running clc ONCE, baked into the hook line
+# (robust in git's minimal-PATH hook environment; hooks are local/.git, never
+# committed). Prefer a stable PATH entry (e.g. Homebrew's /opt/homebrew/bin/clc
+# symlink) over realpath: realpath resolves into a version-pinned Cellar dir that
+# `brew upgrade` deletes, which would silently break auto-sync. Fall back to this
+# script's own absolute path (manual install / running ./clc.sh directly).
 _CLC_SELF=""
 clc_self() {
     if [[ -z "${_CLC_SELF}" ]]; then
-        _CLC_SELF=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")
+        # Use the invocation path as-is, made absolute but WITHOUT resolving
+        # symlinks. `realpath` would resolve a Homebrew bin symlink into a
+        # version-pinned Cellar path that `brew upgrade` deletes, breaking baked
+        # hooks. When invoked via PATH as `clc`, BASH_SOURCE is already the stable
+        # symlink (e.g. /opt/homebrew/bin/clc); when run as ./clc.sh it's the file.
+        local p="${BASH_SOURCE[0]:-$0}"
+        [[ "${p}" == /* ]] || p="$(cd "$(dirname "${p}")" 2>/dev/null && pwd)/$(basename "${p}")"
+        _CLC_SELF="${p}"
     fi
     echo "${_CLC_SELF}"
 }

@@ -1,0 +1,5 @@
+store tracked files:
+.clc/registry
+<project>/.claude/settings.json
+<project>/.claude/settings.local.json
+<project>/CLAUDE.md
