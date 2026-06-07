@@ -197,13 +197,27 @@ store_sync_project() {
     Ftmp=$(mktemp)
     collect_claude_files_in_dir "${wt}" > "${Ftmp}"   # brain files, relative to wt
 
-    # Drop orphans: tracked files under rel that are no longer in the brain.
+    # Submodule subtrees (relative to wt) are nested projects with their own store
+    # subtree under "${rel}/<submodule>". The brain collection prunes them, so they
+    # never appear in Ftmp — orphan-removal below must skip them too, or syncing the
+    # parent would clobber a submodule's separately-synced brain.
+    local subtmp; subtmp=$(mktemp)
+    git -C "${wt}" submodule status --recursive 2>/dev/null | awk '{print $2}' > "${subtmp}"
+
+    # Drop orphans: tracked files under rel that are no longer in the brain
+    # (excluding files that belong to a nested submodule subtree).
     while IFS= read -r -d '' t; do
-        local t_rel="${t#${rel}/}"
+        local t_rel="${t#${rel}/}" sm in_submodule=0
+        while IFS= read -r sm; do
+            [[ -n "${sm}" ]] || continue
+            if [[ "${t_rel}" == "${sm}/"* ]]; then in_submodule=1; break; fi
+        done < "${subtmp}"
+        [[ ${in_submodule} -eq 1 ]] && continue
         if ! grep -qxF "${t_rel}" "${Ftmp}"; then
             git -C "${store}" rm -q -- "${t}" >/dev/null 2>&1 || true
         fi
     done < <(git -C "${store}" ls-files -z -- "${rel}")
+    rm -f "${subtmp}"
 
     # Copy current brain files into the subtree and stage them.
     while IFS= read -r f; do
@@ -508,11 +522,28 @@ _find_claude_md_files() {
 }
 
 # Return the most recent timestamp subdirectory under save_base, or empty string.
+# Legacy (pre-v2) storage helper; superseded by store_mirror_dir. Retained until
+# the legacy ~/.clc/saved store is formally removed (P8).
 latest_save_dir() {
     local save_base="$1"
     [[ -d "${save_base}" ]] || return 0
     local latest; latest=$(ls "${save_base}" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
     [[ -n "${latest}" ]] && echo "${save_base}/${latest}"
+}
+
+# Echo the store mirror dir ($store/$rel) for a repo's HEAD-committed brain.
+# This is the v2 replacement for latest_save_dir: "storage" now means the git
+# store mirror subtree, keyed by the main worktree's HOME-relative path.
+# Returns non-zero (no output) when: project not under $HOME, store absent, or
+# the project has no tracked brain in the store ("no saved state" equivalent).
+store_mirror_dir() {
+    local main_worktree="$1"
+    local rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || return 1
+    local store; store="$(clc_store_dir)"
+    [[ -d "${store}/.git" ]] || return 1
+    git -C "${store}" ls-files -- "${rel}" 2>/dev/null | grep -q . || return 1
+    echo "${store}/${rel}"
 }
 
 # Global arrays populated by _compare_claude_files.
@@ -533,6 +564,18 @@ _compare_claude_files() {
     tmp_wt=$(mktemp) tmp_storage=$(mktemp)
     collect_claude_files_in_dir "${wt}"       > "$tmp_wt"
     collect_claude_files_in_dir "${save_dir}" > "$tmp_storage"
+
+    # The worktree collection prunes nested submodule subtrees (they are separate
+    # projects with their own store subtree). Prune the same paths from the storage
+    # side so a parent's mirror — which physically nests the submodule's synced
+    # files — compares symmetrically. No-op for repos without
+    # submodules and for the submodule's own (un-nested) subtree.
+    local sm
+    while IFS= read -r sm; do
+        [[ -n "${sm}" ]] || continue
+        grep -v "^${sm}/" "$tmp_storage" > "${tmp_storage}.f" 2>/dev/null || true
+        mv "${tmp_storage}.f" "$tmp_storage"
+    done < <(git -C "${wt}" submodule status --recursive 2>/dev/null | awk '{print $2}')
 
     while IFS= read -r f; do _CMP_ONLY_STORAGE+=("$f"); done  < <(comm -23 "$tmp_storage" "$tmp_wt")
     while IFS= read -r f; do _CMP_ONLY_WORKTREE+=("$f"); done < <(comm -13 "$tmp_storage" "$tmp_wt")
@@ -599,33 +642,6 @@ _print_compare_output() {
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-cmd_save() {
-    local main_gitdir main_worktree current_worktree
-    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
-    main_worktree=$(git_main_worktree "${main_gitdir}") \
-                                         || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                         || die "unable to determine current worktree"
-
-    local save_base; save_base=$(repo_save_base "${main_worktree}")
-    local -a files=()
-    while IFS= read -r f; do files+=("$f"); done \
-        < <(collect_claude_files_in_dir "${current_worktree}")
-
-    local dest_dir="${save_base}/$(date +%s)"
-    mkdir -p "${dest_dir}"
-    # Record the full path used for the hash, for discoverability when browsing storage.
-    printf '%s\n' "$(realpath "${main_worktree}")" > "${save_base}/full-path.txt"
-    for f in ${files[@]+"${files[@]}"}; do
-        mkdir -p "$(dirname "${dest_dir}/${f}")"
-        cp "${current_worktree}/${f}" "${dest_dir}/${f}"
-    done
-
-    print_header "Saved"
-    printf "  %s\n" "$(short_path "${dest_dir}")"
-    printf "  %d file(s)\n" "${#files[@]}"
-}
-
 cmd_compare() {
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
@@ -634,9 +650,9 @@ cmd_compare() {
     current_worktree=$(git_current_worktree) \
                                          || die "unable to determine current worktree"
 
-    local save_base; save_base=$(repo_save_base "${main_worktree}")
-    local save_dir; save_dir=$(latest_save_dir "${save_base}")
-    [[ -n "${save_dir}" ]] || die "no saved state found — run 'clc save' first"
+    local save_dir
+    save_dir=$(store_mirror_dir "${main_worktree}") \
+        || die "no saved state found — run 'clc save' first"
 
     _compare_claude_files "${current_worktree}" "${save_dir}"
     local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
@@ -661,9 +677,9 @@ cmd_diff() {
     current_worktree=$(git_current_worktree) \
                                          || die "unable to determine current worktree"
 
-    local save_base; save_base=$(repo_save_base "${main_worktree}")
-    local save_dir; save_dir=$(latest_save_dir "${save_base}")
-    [[ -n "${save_dir}" ]] || die "no saved state found — run 'clc save' first"
+    local save_dir
+    save_dir=$(store_mirror_dir "${main_worktree}") \
+        || die "no saved state found — run 'clc save' first"
 
     _compare_claude_files "${current_worktree}" "${save_dir}"
     local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
@@ -701,9 +717,9 @@ cmd_restore() {
     current_worktree=$(git_current_worktree) \
                                          || die "unable to determine current worktree"
 
-    local save_base; save_base=$(repo_save_base "${main_worktree}")
-    local save_dir; save_dir=$(latest_save_dir "${save_base}")
-    [[ -n "${save_dir}" ]] || die "no saved state found — run 'clc save' first"
+    local save_dir
+    save_dir=$(store_mirror_dir "${main_worktree}") \
+        || die "no saved state found — run 'clc save' first"
 
     _compare_claude_files "${current_worktree}" "${save_dir}"
     local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
@@ -769,9 +785,8 @@ cmd_new() {
     echo
 
     if [[ ${opt_no_claude} -eq 0 ]]; then
-        local save_base; save_base=$(repo_save_base "${main_worktree}")
-        local save_dir; save_dir=$(latest_save_dir "${save_base}")
-        if [[ -n "${save_dir}" ]]; then
+        local save_dir
+        if save_dir=$(store_mirror_dir "${main_worktree}"); then
             _compare_claude_files "${new_path}" "${save_dir}"
             local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
             local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
@@ -1009,9 +1024,8 @@ cmd_ls() {
         done
     fi
 
-    # Storage comparison
-    local save_base; save_base=$(repo_save_base "${main_worktree}")
-    local save_dir; save_dir=$(latest_save_dir "${save_base}")
+    # Storage comparison (against the git store mirror).
+    local save_dir; save_dir=$(store_mirror_dir "${main_worktree}" || true)
     echo
     if [[ -z "${save_dir}" ]]; then
         echo "${CLR_MUTED}(no saved state — run 'clc save')${CLR_RESET}"
@@ -1547,19 +1561,19 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          ${CLR_MUTED}(gitignore-only; the standalone step within enroll)${CLR_RESET}
   ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
                          ${CLR_MUTED}(gitignore-only)${CLR_RESET}
-  ${CLR_BOLD}save${CLR_RESET}                   Save Claude files from the current worktree
-                         to ~/.clc/saved/
-  ${CLR_BOLD}compare${CLR_RESET}                Compare current worktree against the latest saved
+  ${CLR_BOLD}save${CLR_RESET}                   Sync Claude files from the current worktree
+                         into the central store.
+  ${CLR_BOLD}compare${CLR_RESET}                Compare current worktree against the stored
                          state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
   ${CLR_BOLD}diff${CLR_RESET}                   Like compare, but prints a full Git diff for all
                          mismatches. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
-  ${CLR_BOLD}restore${CLR_RESET}                Restore Claude files from the latest saved state
+  ${CLR_BOLD}restore${CLR_RESET}                Restore Claude files from the stored state
                          to the current worktree. Prompts before making changes.
 
 ${CLR_BOLD}Actions (Worktrees):${CLR_RESET}
   ${CLR_BOLD}new${CLR_RESET}${CLR_MUTED}|add${CLR_RESET} ${CLR_MUTED}[-n|--no-claude]${CLR_RESET} <name> ${CLR_MUTED}[<branch>]${CLR_RESET}
                          Create a new managed peer worktree and restore Claude
-                         files from the latest saved state. Worktree name
+                         files from the stored state. Worktree name
                          derived from <name>: last path component, ticket
                          prefix stripped ${CLR_MUTED}(e.g. feature/PROJ-123_foo → foo)${CLR_RESET}.
                          Branch defaults to <name> as-is; pass <branch> to
@@ -1649,7 +1663,7 @@ main() {
         unignore)     cmd_unignore ;;
         enroll)       cmd_enroll ;;
         unenroll)     cmd_unenroll ;;
-        save)         cmd_save ;;
+        save)         cmd_sync ${cmd_args[@]+"${cmd_args[@]}"} ;;
         compare)      cmd_compare ;;
         diff)         cmd_diff ;;
         restore)      cmd_restore ;;

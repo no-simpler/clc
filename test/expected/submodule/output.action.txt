@@ -1,12 +1,10 @@
 === save from submodule ===
-Saved
-  %%PARENT_DIR%%/.clc-store/saved/sub@%%MD5%%/<timestamp>
-  1 file(s)
+Synced
+  1 Claude file(s) → store
 
 === save from parent ===
-Saved
-  %%PARENT_DIR%%/.clc-store/saved/parent@%%MD5%%/<timestamp>
-  2 file(s)
+Synced
+  2 Claude file(s) → store
 
 === ls from submodule ===
 Claude files

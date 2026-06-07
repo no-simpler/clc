@@ -41,7 +41,14 @@ echo "# MODIFIED instructions" > "${CASE_DIR}/main/CLAUDE.md"
 mkdir -p "${CASE_DIR}/main/docs"
 echo "# nested instructions" > "${CASE_DIR}/main/docs/CLAUDE.md"
 
+# diff prints git-diff paths for the store mirror (a<save>) and worktree (b<wt>).
+# The store mirror lives at CLC_STORE/store/<main-worktree HOME-relative path>;
+# normalize both to stable placeholders. Match the store path BEFORE the worktree
+# path (the mirror's rel suffix ends in "/main", which would otherwise be eaten).
+MAIN_WT="$(cd "${CASE_DIR}/main" && pwd)"
+PREFIX="${MAIN_WT#${HOME}/}"
+SAVE_DIR="${CLC_STORE}/store/${PREFIX}"
 (cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color diff) \
-    | sed -E "s|${CASE_DIR}/\\.clc-store/saved/[^/]+/[0-9]+/|<save>/|g" \
+    | sed -E "s|${SAVE_DIR}/|<save>/|g" \
     | sed -E "s|${CASE_DIR}/main/|<wt>/|g" \
     || true

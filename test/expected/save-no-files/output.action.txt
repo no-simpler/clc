@@ -1,3 +1,5 @@
-Saved
-  %%PARENT_DIR%%/.clc-store/saved/main@%%MD5%%/<timestamp>
-  0 file(s)
+Synced
+  (store already up to date)
+
+store tracked files:
+.clc/registry

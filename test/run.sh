@@ -104,15 +104,13 @@ normalize_output() {
     if [[ -n "${parent_home}" && "${parent_home}" != "${parent_abs}" ]]; then
         out="${out//${parent_home}/%%PARENT_DIR_HOME%%}"
     fi
-    # MD5 first (anchored by its '@' prefix), then the shared SHA scrub so the
-    # 32-hex MD5 component is already replaced and not re-clobbered.
+    # Shared SHA scrub for any git object SHA that history-surfacing output emits.
     #
-    # The SHA scrub uses explicit boundary chars (start/end or any char that is
-    # not hex and not '.') rather than \b, because BSD/macOS sed does not support
-    # \b. Excluding '.' deliberately leaves git's "index <sha>..<sha>" diff lines
-    # alone (those are content-derived and already stable in snapshots); standalone
-    # SHAs that history commands emit (e.g. "commit <sha>") are scrubbed.
-    out=$(printf '%s' "${out}" | sed -E 's/@[0-9a-f]{32}/@%%MD5%%/g')
+    # The scrub uses explicit boundary chars (start/end or any char that is not hex
+    # and not '.') rather than \b, because BSD/macOS sed does not support \b.
+    # Excluding '.' deliberately leaves git's "index <sha>..<sha>" diff lines alone
+    # (those are content-derived and already stable in snapshots); standalone SHAs
+    # that history commands emit (e.g. "commit <sha>") are scrubbed.
     out=$(printf '%s' "${out}" | sed -E 's/(^|[^0-9a-f.])[0-9a-f]{7,40}([^0-9a-f.]|$)/\1%%SHA%%\2/g')
     printf '%s' "${out}"
 }

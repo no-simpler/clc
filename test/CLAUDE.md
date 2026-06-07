@@ -64,16 +64,19 @@ The runner normalizes machine-specific paths before comparing against snapshots:
 - `%%PARENT_DIR%%` — the parent directory of the repo's managed worktrees, in `~`-shortened form. Used for **display paths** that `clc` emits via `short_path`. If `clc` fails to shorten a path, the absolute form appears in the output instead and the snapshot will not match (intentional: this is how the test detects the regression).
 - `%%PARENT_DIR_ABS%%` — same directory in absolute form, for **raw file content** that is not processed by `short_path` (e.g. `full-path.txt`).
 - `%%PARENT_DIR_HOME%%` — the same directory in **HOME-relative** form (no leading `~` or `/`). The v2 git store mirrors each project's second brain under a HOME-relative subtree path, which neither of the two placeholders above matches; this covers store/registry subtree paths.
-- `%%MD5%%` — the MD5 hash component in a storage directory name (32 hex chars, anchored by its `@` prefix).
-- `%%SHA%%` — a git object SHA (7–40 hex chars) that history-surfacing output emits, e.g. `commit <sha>`. Applied as a shared scrub in `run.sh` after the `%%MD5%%` replacement so the MD5 component is not re-clobbered. The scrub deliberately leaves git's `index <sha>..<sha>` diff lines alone (those are content-derived and stable) and avoids `\b` for BSD/macOS-sed portability.
+- `%%SHA%%` — a git object SHA (7–40 hex chars) that history-surfacing output emits, e.g. `commit <sha>`. Applied as a shared scrub in `run.sh`. The scrub deliberately leaves git's `index <sha>..<sha>` diff lines alone (those are content-derived and stable) and avoids `\b` for BSD/macOS-sed portability.
 
-## Non-deterministic output
+## Storage = the git store mirror
 
-Commands that include timestamps (e.g. `clc save` prints the timestamp directory path) must be normalized before the snapshot is recorded. Pipe through sed in the case script:
+`save`/`restore`/`compare`/`diff` (and the storage-comparison parts of `ls`/`new`) operate on the **git store mirror**: `clc save` is an alias for `clc sync`, and "storage" is the project's HEAD-committed subtree under `$(clc_store_dir)/<HOME-relative main-worktree path>` (the legacy `~/.clc/saved/<name>@<md5>/<timestamp>` snapshots are gone). Routine output is content-derived (in-sync / diff state), so it is snapshot-stable by construction — no timestamp or MD5 normalization is needed.
+
+When a case asserts store contents or store-relative paths directly (file listings, `diff`'s git-diff paths), strip the machine-specific subtree prefix with sed against a `<project>`/`<save>` placeholder, following `sync-basic.sh`, `save-basic.sh`, and `diff-diffs.sh`:
 
 ```bash
-(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) \
-    | sed -E 's|/[0-9]{10,}$|/<timestamp>|'
+STORE="${CLC_STORE}/store"          # or "${XDG_DATA_HOME}/clc/store" when CLC_STORE is unset
+MAIN_WT="$(cd "${CASE_DIR}/main" && pwd)"
+PREFIX="${MAIN_WT#${HOME}/}"
+git -C "${STORE}" ls-files | sed "s|^${PREFIX}/|<project>/|"
 ```
 
-The pattern matches a path component of 10+ digits at end-of-line (Unix timestamps are 10 digits as of 2001 and will remain so until 2286).
+Pin `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` in the case (as `sync-basic.sh` does) so any leaked store-commit history stays deterministic; only explicit history commands surface SHAs, which `run.sh` scrubs to `%%SHA%%`.

@@ -72,13 +72,11 @@ echo "# sub instructions" > "${CASE_DIR}/parent/sub/CLAUDE.md"
 # ── Action: save from submodule, then save from parent, then ls both ────────
 
 echo "=== save from submodule ==="
-(cd "${CASE_DIR}/parent/sub" && "$BASH" "${CLC}" --no-color save) \
-    | sed -E 's|/[0-9]{10,}$|/<timestamp>|'
+(cd "${CASE_DIR}/parent/sub" && "$BASH" "${CLC}" --no-color save)
 
 echo ""
 echo "=== save from parent ==="
-(cd "${CASE_DIR}/parent" && "$BASH" "${CLC}" --no-color save) \
-    | sed -E 's|/[0-9]{10,}$|/<timestamp>|'
+(cd "${CASE_DIR}/parent" && "$BASH" "${CLC}" --no-color save)
 
 echo ""
 echo "=== ls from submodule ==="
