@@ -146,7 +146,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/no-simpler/clc/compare/v1.4.1...v2.0.0
 [1.4.1]: https://github.com/no-simpler/clc/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/no-simpler/clc/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/no-simpler/clc/compare/v1.2.0...v1.3.0
