@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-07
+
+### Fixed
+- The central store now captures your full second brain even when files match your global gitignore (e.g. `.claude/settings.local.json` via `core.excludesfile` or `~/.config/git/ignore`). Previously those files were silently dropped from the store and from backups.
+- Git hooks installed by `clc enroll` now reference clc through its stable path rather than a version-pinned Homebrew Cellar path, so `brew upgrade` no longer silently breaks auto-sync.
+
 ## [2.0.0] - 2026-06-07
 
 Major release. clc grows from "save Claude files to local timestamp snapshots,
@@ -146,7 +152,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/no-simpler/clc/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/no-simpler/clc/compare/v1.4.1...v2.0.0
 [1.4.1]: https://github.com/no-simpler/clc/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/no-simpler/clc/compare/v1.3.0...v1.4.0
