@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-07
+
+Major release. clc grows from "save Claude files to local timestamp snapshots,
+restore across worktrees" into a centrally version-controlled, auto-syncing,
+cross-machine **second-brain** store. The two slices are cleanly separated: your
+code stays in its own git repo (the second brain never enters it), and the second
+brain is *also* version-controlled — separately and centrally — in one git-backed
+store per machine, with optional auto-backup for durability across machines.
+
+### Added
+- **Central git-backed store** (`$XDG_DATA_HOME/clc/store`, default
+  `~/.local/share/clc/store`): a real (non-bare) git repo whose working tree
+  mirrors every enrolled project's second brain under a HOME-relative path. Real
+  git history replaces v1's timestamp snapshots.
+- **Enrollment**: `clc enroll` graduates the old ignore-only setup into a single
+  step — local-gitignore the brain, register the project in the store's manifest,
+  install sync hooks, and do an initial sync. `clc unenroll` reverses all four.
+  `ignore`/`unignore` remain as the gitignore-only step.
+- **Auto-sync via git hooks** (`post-commit`/`post-merge`/`post-checkout`):
+  committing in any worktree mirrors that worktree's brain into the store
+  (current-worktree-wins; a warning prints when synced from a peer). Best-effort
+  cadence — rebase-replayed commits don't fire hooks; run `clc sync` manually.
+  Hooks compose with existing hooks / `core.hooksPath` via a sentinel-marked block.
+- **Backups** (`clc backup` + automatic on sync): configurable targets — a git
+  remote or a local bundle (rotated atomically via `.prev`). Decoupled from the
+  per-commit store sync, debounced (default 15 min, configurable), backgrounded
+  and fail-safe (an offline/unauthed target warns and logs, never blocks a commit).
+- **Cross-machine**: the registry/manifest committed into the store doubles as a
+  cold-start manifest. `clc clone` / `clc adopt` cold-start a fresh machine
+  (guarded — never clobber a non-empty directory); `clc relink` re-keys a moved
+  repo; `clc doctor` reports drift read-only (never acts).
+- **`clc migrate`**: one-shot v1→v2 import — discovers v1-clc-touched repos and
+  enrolls them (pre-migration timestamp history is not replayed).
+- **Config** via `git config -f $XDG_CONFIG_HOME/clc/config`; **XDG locations**
+  for config / data / state. `CLC_STORE` still overrides the data root.
+
+### Changed
+- `save` is now an alias for the store sync; `save`/`restore`/`compare`/`diff`
+  operate against the store mirror (the HEAD-committed brain) instead of the
+  latest timestamp snapshot. `status` now also reports enrollment, hook, and
+  backup-staleness state. Project identity is the repo's HOME-relative path.
+
+### Removed
+- The v1 `~/.clc/saved/<name>@<md5>/<timestamp>/` snapshot store and its
+  path-hash machinery. (Run `clc migrate` to bring v1 projects into the v2 store.)
+
+### Design notes (folded in from the now-retired V2.md design doc)
+- **Non-bare git store** so the owner can browse every brain laid out on disk and
+  cold-start is a plain checkout; the trade-off (one shared index) is handled by a
+  mandatory mkdir-based store lock (no `flock`, for macOS portability).
+- **Copy-sync, not symlink** (symlinks are more conspicuous, bake in machine paths,
+  and blur the commit cadence). Sync is **subtree-scoped and delete-aware** —
+  re-materialize only the project's subtree, drop orphans, never sweep another
+  project's in-flight changes. Nested submodules get their own un-clobbered subtrees.
+- **Registry as sorted line-oriented text** (not git-config) so a cross-machine-
+  synced manifest merges cleanly; config stays git-config (local, single-writer).
+- **Identity = HOME-relative path** with an explicit `clc relink` for moves (a
+  silent cross-machine move is itself a footgun); cross-machine reconciliation is
+  **surface-don't-apply** — clc reports, the user runs the fix.
+- **Determinism**: routine output is content-derived (no SHAs/dates); store commits
+  keep real dates with a fixed identity + `gpgsign=false` stamped into the store's
+  own `.git/config`; the test harness pins `GIT_*_DATE`, isolates `XDG_*`/`CLC_STORE`,
+  and uses `CLC_NOW` / `CLC_SYNC_SYNC` seams for backup timing/async.
+- Backup mechanics (bundle `.prev` rotation, fail-safe backgrounded push) are
+  adapted from the local `Nexus` tool; clc adds debounce + locking (Nexus has
+  neither, assuming single-machine last-writer-wins) and drops Nexus's encryption
+  and no-remote rule.
+
 ## [1.4.1] - 2026-04-09
 
 ### Changed
