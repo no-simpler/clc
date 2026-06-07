@@ -98,8 +98,9 @@ git config -f ~/.config/clc/config clc.backup.github.kind remote
 git config -f ~/.config/clc/config clc.backup.github.url  git@github.com:me/clc-store.git
 
 # A local bundle blob (e.g. an iCloud-backed path) — single small file, rotated
+# (~/Documents is iCloud-backed when "Desktop & Documents Folders" sync is on)
 git config -f ~/.config/clc/config clc.backup.icloud.kind bundle
-git config -f ~/.config/clc/config clc.backup.icloud.path '~/Library/Mobile Documents/com~apple~CloudDocs/clc-store.bundle'
+git config -f ~/.config/clc/config clc.backup.icloud.path '~/Documents/clc-store.bundle'
 ```
 
 A successful sync triggers a **debounced** (default 15 min), backgrounded, fail-safe push to all targets. Force an immediate push anytime:
