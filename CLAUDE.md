@@ -56,8 +56,6 @@ Output style: section headers via `print_header`; muted secondary info via `CLR_
 
 No compilation necessary, script should remain a single file and be runnable from it. Remember to always keep --help output in sync with latest features.
 
-When invoking `git commit` (e.g., publishing a version, verification loop), make sure to disable commig signing to prevent in-terminal “full screen” GPG pop-ups that break the flow.
-
 ## Verification loop
 
 `test/run.sh` is the snapshot test runner. See `test/CLAUDE.md` for full details on the test system and how to add new tests.
