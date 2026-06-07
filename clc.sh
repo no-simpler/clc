@@ -297,7 +297,7 @@ install_hooks() {
         fi
         {
             printf '%s\n' "${CLC_HOOK_BEGIN}"
-            printf '"%s" sync --from-hook >/dev/null 2>&1 || true\n' "${self}"
+            printf '"%s" sync --from-hook >/dev/null || true\n' "${self}"
             printf '%s\n' "${CLC_HOOK_END}"
         } >> "${file}"
         chmod +x "${file}"
@@ -333,6 +333,21 @@ hook_installed() {
     local main_gitdir="$1" hook="$2"
     local file; file="$(hooks_dir "${main_gitdir}")/${hook}"
     [[ -f "${file}" ]] && grep -qF "${CLC_HOOK_BEGIN}" "${file}" 2>/dev/null
+}
+
+# Return 0 if the project (identified by its main worktree) is enrolled: the store
+# exists AND its registry lists the project by its HOME-relative path. Content-
+# derived, never resurrects anything. Shared by cmd_status and the --from-hook gate.
+is_enrolled() {
+    local main_worktree="$1"
+    local rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || return 1
+    [[ -d "$(clc_store_dir)/.git" ]] || return 1
+    local path _rest
+    while IFS=$'\t' read -r path _rest; do
+        [[ "${path}" == "${rel}" ]] && return 0
+    done < <(registry_read)
+    return 1
 }
 
 
@@ -1055,13 +1070,8 @@ cmd_status() {
     # A repo is enrolled iff the store exists AND its registry lists this project
     # by its HOME-relative path. Everything is guarded so an unenrolled repo (no
     # store) renders NOTHING new, keeping pre-v2 snapshots byte-identical.
-    local is_enrolled=0
-    local rel_id="${main_worktree#${HOME}/}"
-    if [[ "${rel_id}" != "${main_worktree}" && -d "$(clc_store_dir)/.git" ]]; then
-        while IFS=$'\t' read -r path _; do
-            [[ "${path}" == "${rel_id}" ]] && { is_enrolled=1; break; }
-        done < <(registry_read)
-    fi
+    local enrolled=0
+    is_enrolled "${main_worktree}" && enrolled=1
 
     # ── Claude-file state for current worktree ────────────────────────────────
     local state_tracked=0 state_ignore state_gitignore=0
@@ -1134,7 +1144,7 @@ cmd_status() {
 
     # Section 1.5: Enrollment (only when enrolled — absent otherwise so unenrolled
     # snapshots stay byte-identical).
-    if [[ ${is_enrolled} -eq 1 ]]; then
+    if [[ ${enrolled} -eq 1 ]]; then
         echo
         print_header "Enrollment"
         echo "  enrolled"
@@ -1481,13 +1491,22 @@ cmd_unenroll() {
 
 # ── v2 sync command (hidden/experimental) ─────────────────────────────────────
 
+# Emit the single non-alarming peer-source warning to STDERR (§6.1). Surfaces
+# through the git hook's output even when --from-hook suppresses stdout. No
+# absolute paths — only the peer worktree's basename — so it stays deterministic.
+warn_peer_source() {
+    local current_worktree="$1"
+    local name; name=$(basename "${current_worktree}")
+    printf '%sclc: synced brain from peer worktree '\''%s'\'' — edit the brain in the main worktree%s\n' \
+        "${CLR_WARN}" "${name}" "${CLR_RESET}" >&2
+}
+
 # Sync the current worktree's second brain into the central git store (§6.1:
 # current-worktree-wins). Hidden/experimental this phase: wired in main()'s
 # dispatch but intentionally absent from usage()/--help.
 cmd_sync() {
     # --from-hook: run silently + fail-safe (git-hook context must not pollute the
-    # user's commit output). Full main-worktree-identity + peer warning is P5;
-    # --from-hook keeps current-worktree identity for now (non-breaking groundwork).
+    # user's commit output). The peer warning still goes to stderr (§6.1).
     local from_hook=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1500,12 +1519,24 @@ cmd_sync() {
 
     local main_gitdir main_worktree current_worktree
     if [[ ${from_hook} -eq 1 ]]; then
+        # GIT_DIR hygiene: git hooks export GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE,
+        # which would make clc's CWD-based `git rev-parse` discovery resolve the
+        # wrong worktree/gitdir. Unset them so clc rediscovers the repo from the
+        # hook's CWD (the worktree that committed). `unset` never errors on a
+        # missing var, so this is safe under set -eu.
+        unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX 2>/dev/null || true
+
         # Fail-safe: any resolution failure exits 0 silently (never break the hook).
         main_gitdir=$(git_main_gitdir)       || exit 0
         main_worktree=$(git_main_worktree "${main_gitdir}") || exit 0
         current_worktree=$(git_current_worktree) || exit 0
         local rel="${main_worktree#${HOME}/}"
         [[ "${rel}" != "${main_worktree}" ]] || exit 0
+        # Enrollment gate: a firing hook implies enrollment, but defensively do not
+        # resurrect store entries from a stray leftover hook on an unenrolled repo.
+        is_enrolled "${main_worktree}" || exit 0
+        # Warn (to stderr) when the committing worktree is a peer, not main.
+        [[ "${current_worktree}" != "${main_worktree}" ]] && warn_peer_source "${current_worktree}"
         store_init >/dev/null 2>&1 || exit 0
         with_store_lock store_sync_project "${rel}" "${current_worktree}" >/dev/null 2>&1 || true
         exit 0
@@ -1518,6 +1549,10 @@ cmd_sync() {
     # Identity = main worktree's HOME-relative path. Error, never guess, if outside $HOME.
     local rel="${main_worktree#${HOME}/}"
     [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+
+    # Interactive sync works standalone (no enrollment gate). Warn (to stderr) when
+    # syncing from a peer worktree (§6.1); the sync still proceeds.
+    [[ "${current_worktree}" != "${main_worktree}" ]] && warn_peer_source "${current_worktree}"
 
     store_init
     with_store_lock store_sync_project "${rel}" "${current_worktree}"

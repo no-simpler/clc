@@ -29,7 +29,7 @@ CLAUDE.md
 post-commit hook:
 #!/usr/bin/env bash
 # >>> clc managed >>>
-"%%CLC%%" sync --from-hook >/dev/null 2>&1 || true
+"%%CLC%%" sync --from-hook >/dev/null || true
 # <<< clc managed <<<
 
 registry:
