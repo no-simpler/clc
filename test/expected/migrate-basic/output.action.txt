@@ -1,0 +1,20 @@
+Migrate
+  %%PARENT_DIR_HOME%%/proj  migrated (2 file(s))
+
+
+registry:
+# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]
+%%PARENT_DIR_HOME%%/proj	git@example.com:me/proj.git
+
+store tracked files:
+.clc/registry
+<project>/.claude/settings.json
+<project>/CLAUDE.md
+
+post-commit hook: present
+exclude has CLAUDE.md: yes
+exclude has /.claude/: yes
+
+re-run migrate (idempotent):
+Migrate
+  %%PARENT_DIR_HOME%%/proj  already enrolled

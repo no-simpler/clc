@@ -7,10 +7,9 @@ set -euo pipefail
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 CLC_VERSION="1.4.1"
-# Explicit CLC_STORE env override (captured before the legacy default is applied).
-# When set, it overrides the v2 data/store root (back-compat + test isolation).
+# Explicit CLC_STORE env override (captured at startup). When set, it overrides
+# the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
-CLC_STORE="${CLC_STORE:-${HOME}/.clc}"
 
 # ── Color / style ─────────────────────────────────────────────────────────────
 
@@ -84,9 +83,10 @@ config_list() { git config -f "$(clc_config_file)" --list 2>/dev/null || true; }
 # ── v2 store ──────────────────────────────────────────────────────────────────
 #
 # The central store is a non-bare git repo whose working tree mirrors each
-# enrolled project's second brain under a HOME-relative path (§4.1). This phase
-# (P2) builds the store + sync machinery in parallel to the legacy ~/.clc/saved
-# snapshots; the legacy save/restore/compare/diff commands are untouched.
+# enrolled project's second brain under a HOME-relative path (§4.1). It is the
+# sole backing for save/restore/compare/diff/ls/new; the legacy ~/.clc/saved
+# timestamp snapshots have been removed (a one-shot `clc migrate` enrolls any
+# repos still recorded there into the store).
 
 # Path to the central store git repo.
 clc_store_dir() { echo "$(clc_data_dir)/store"; }
@@ -495,21 +495,6 @@ _claude_item_git_managed() {
 
 # ── Storage helpers ───────────────────────────────────────────────────────────
 
-# Cross-platform md5 hash of a string.
-md5_str() {
-    if command -v md5sum &>/dev/null; then
-        printf '%s' "$1" | md5sum | awk '{print $1}'
-    else
-        printf '%s' "$1" | md5 -q
-    fi
-}
-
-# Return the base save directory for a repo: ~/.clc/saved/<name>@<md5-of-path>
-repo_save_base() {
-    local resolved; resolved=$(realpath "$1")
-    echo "${CLC_STORE}/saved/$(basename "${resolved}")@$(md5_str "${resolved}")"
-}
-
 # Print relative paths of all Claude files in a directory (sorted, unique).
 collect_claude_files_in_dir() {
     local base="$1"
@@ -536,19 +521,9 @@ _find_claude_md_files() {
         -name "CLAUDE.md" -type f -print 2>/dev/null | sort
 }
 
-# Return the most recent timestamp subdirectory under save_base, or empty string.
-# Legacy (pre-v2) storage helper; superseded by store_mirror_dir. Retained until
-# the legacy ~/.clc/saved store is formally removed (P8).
-latest_save_dir() {
-    local save_base="$1"
-    [[ -d "${save_base}" ]] || return 0
-    local latest; latest=$(ls "${save_base}" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
-    [[ -n "${latest}" ]] && echo "${save_base}/${latest}"
-}
-
 # Echo the store mirror dir ($store/$rel) for a repo's HEAD-committed brain.
-# This is the v2 replacement for latest_save_dir: "storage" now means the git
-# store mirror subtree, keyed by the main worktree's HOME-relative path.
+# "storage" means the git store mirror subtree, keyed by the main worktree's
+# HOME-relative path.
 # Returns non-zero (no output) when: project not under $HOME, store absent, or
 # the project has no tracked brain in the store ("no saved state" equivalent).
 store_mirror_dir() {
@@ -1439,16 +1414,17 @@ _store_unenroll() {
     fi
 }
 
-# Graduate ignore → full enrollment (§4.7): gitignore + register + hooks + sync.
-cmd_enroll() {
-    local main_gitdir main_worktree current_worktree
-    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
-    main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
+# Enroll core (§4.7), decoupled from $PWD: gitignore + register + hooks + sync for
+# a repo whose paths are already resolved. Shared by cmd_enroll (PWD-resolved) and
+# cmd_migrate (per-candidate). Sets _STORE_SYNC_RESULT (read by callers for output).
+# Args: <main_gitdir> <main_worktree> <current_worktree> [<rel>]. Returns non-zero
+# (no side effects) when the repo is outside $HOME — caller decides how to report.
+_enroll_at() {
+    local main_gitdir="$1" main_worktree="$2" current_worktree="$3" rel="${4-}"
 
-    # Identity = main worktree's HOME-relative path. Error, never guess, if outside $HOME.
-    local rel="${main_worktree#${HOME}/}"
-    [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+    # Identity = main worktree's HOME-relative path. Refuse, never guess, if outside $HOME.
+    [[ -n "${rel}" ]] || rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || return 1
     local origin
     origin=$(git -C "${main_worktree}" config --get remote.origin.url 2>/dev/null || true)
 
@@ -1461,6 +1437,19 @@ cmd_enroll() {
 
     # 3. Install hooks (once, at the main gitdir).
     install_hooks "${main_gitdir}"
+}
+
+# Graduate ignore → full enrollment (§4.7): gitignore + register + hooks + sync.
+cmd_enroll() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
+
+    local rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+
+    _enroll_at "${main_gitdir}" "${main_worktree}" "${current_worktree}" "${rel}"
 
     print_header "Enrolled"
     echo "  registered"
@@ -1504,6 +1493,73 @@ cmd_unenroll() {
     echo
 
     cmd_status
+}
+
+# ── v2 migrate ────────────────────────────────────────────────────────────────
+#
+# One-shot v1→v2 helper (§7). v1 stored brains under "${root}/saved/<name>@<md5>/"
+# with a sibling full-path.txt recording each repo's absolute path. Migrate uses
+# those full-path.txt files as the enumeration source, verifies each candidate is
+# genuinely clc-touched via the local-gitignore signal (the primary truth), and
+# enrolls it into the v2 store. Pre-migration timestamp history is NOT replayed:
+# enrollment performs a single "current brain" commit (§7.3). Idempotent.
+
+# Legacy v1 saved-store dir. Honors the CLC_STORE override (tests + back-compat);
+# the v2 store lives at "${root}/store" under the same override root, so legacy
+# "saved/" and the new "store/" coexist without collision.
+legacy_saved_dir() { echo "${CLC_STORE_OVERRIDE:-${HOME}/.clc}/saved"; }
+
+cmd_migrate() {
+    print_header "Migrate"
+
+    local saved; saved="$(legacy_saved_dir)"
+    if [[ ! -d "${saved}" ]]; then
+        echo "  ${CLR_MUTED}(no legacy clc storage found)${CLR_RESET}"
+        return 0
+    fi
+
+    local seen=" "   # space-delimited list of rels already handled (dedup)
+    local found=0
+    local fp abs main_gitdir main_worktree rel
+    for fp in "${saved}"/*/full-path.txt; do
+        [[ -f "${fp}" ]] || continue          # no-glob → literal pattern, skip
+        found=1
+        IFS= read -r abs < "${fp}" || true     # first line = repo abs path
+        [[ -n "${abs}" ]] || continue
+
+        # Candidate must still exist and be a git repo.
+        [[ -d "${abs}" ]] || continue
+        main_gitdir=$(cd "${abs}" 2>/dev/null && git_main_gitdir 2>/dev/null) || continue
+        main_worktree=$(git_main_worktree "${main_gitdir}" 2>/dev/null) || continue
+
+        # Verify via the local-gitignore signal (primary truth): "no" → not clc-touched.
+        [[ "$(claude_local_ignore_state "${main_gitdir}")" != "no" ]] || continue
+
+        # Identity = main worktree's HOME-relative path; skip + warn if outside $HOME.
+        rel="${main_worktree#${HOME}/}"
+        if [[ "${rel}" == "${main_worktree}" ]]; then
+            echo "  $(short_path "${main_worktree}")"
+            print_warning_line "not under \$HOME — cannot derive store identity; skipped"
+            continue
+        fi
+
+        # Deduplicate: a repo may have several legacy <name>@<md5> dirs.
+        case "${seen}" in *" ${rel} "*) continue ;; esac
+        seen="${seen}${rel} "
+
+        if is_enrolled "${main_worktree}"; then
+            echo "  ${rel}  ${CLR_MUTED}already enrolled${CLR_RESET}"
+            continue
+        fi
+
+        # Enroll it (one-time current-brain commit; pre-migration history dropped).
+        _enroll_at "${main_gitdir}" "${main_worktree}" "${main_worktree}" "${rel}"
+        local n; n=$(collect_claude_files_in_dir "${main_worktree}" | grep -c . || true)
+        echo "  ${rel}  migrated (${n} file(s))"
+    done
+
+    [[ ${found} -eq 1 ]] || echo "  ${CLR_MUTED}(no legacy clc storage found)${CLR_RESET}"
+    echo
 }
 
 # ── v2 backups ────────────────────────────────────────────────────────────────
@@ -2161,6 +2217,9 @@ ${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
                          install hooks. ${CLR_MUTED}Never clobbers a non-empty dir.${CLR_RESET}
   ${CLR_BOLD}adopt${CLR_RESET}                  Like clone but never clones: deploy the brain +
                          hooks only into already-present matching repos.
+  ${CLR_BOLD}migrate${CLR_RESET}                One-shot v1→v2: discover repos from the legacy
+                         ~/.clc/saved store and enroll the clc-touched ones.
+                         ${CLR_MUTED}Idempotent; pre-v2 snapshot history is not replayed.${CLR_RESET}
 
 ${CLR_BOLD}Flags:${CLR_RESET}
   ${CLR_BOLD}-k, --keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune, close)${CLR_RESET} Keep the worktree's git branch
@@ -2243,6 +2302,7 @@ main() {
         relink)       cmd_relink ${cmd_args[@]+"${cmd_args[@]}"} ;;
         clone)        cmd_clone ${cmd_args[@]+"${cmd_args[@]}"} ;;
         adopt)        cmd_adopt ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        migrate)      cmd_migrate ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac
