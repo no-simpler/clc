@@ -1,0 +1,3 @@
+stamp after force backup at T: 0 (relative to T)
+stamp after debounced sync at T+10: 0 (relative to T)
+stamp after force backup at T+10: 10 (relative to T)

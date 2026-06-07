@@ -80,3 +80,17 @@ git -C "${STORE}" ls-files | sed "s|^${PREFIX}/|<project>/|"
 ```
 
 Pin `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` in the case (as `sync-basic.sh` does) so any leaked store-commit history stays deterministic; only explicit history commands surface SHAs, which `run.sh` scrubs to `%%SHA%%`.
+
+## Backups (P6)
+
+Backup tests (`backup-bundle.sh`, `backup-remote.sh`, `backup-debounce.sh`) exercise the store-push machinery (§4.9/§6.2) through its two determinism seams:
+
+- **`CLC_SYNC_SYNC=1`** — makes the post-sync backup push run **synchronously** (no `& disown`), so the harness can observe its effect and capture `clc backup` output. Every backup test must export this to avoid async races.
+- **`CLC_NOW=<epoch>`** — pins **all** wall-clock math: the debounce comparison and the `status` Backups staleness age. Export it (or pass per-invocation, as `backup-debounce.sh` does) so both stay deterministic.
+
+Conventions:
+
+- Configure targets by writing the clc config directly: `mkdir -p "${XDG_CONFIG_HOME}/clc"` then `git config -f "${XDG_CONFIG_HOME}/clc/config" clc.backup.<name>.kind …` (the raw `git config -f` needs the dir to exist first; clc's own `config_set` mkdirs, but tests bypass it). Target `<name>` must not contain dots.
+- Do **not** snapshot bundle/remote contents (they carry SHAs/dates). Assert **existence + `git bundle verify`** (bundle) or **`git -C remote.git rev-parse --verify <branch>`** (remote), and `echo` a fixed OK line into the action snapshot instead of the verify output.
+- A bare remote created under the case dir would be picked up by the runner's `*/` worktree discovery and produce a spurious (error) snapshot. Place it under a **dot-dir** (`${CASE_DIR}/.remote/remote.git`) so the glob skips it.
+- The per-worktree `output.<wt>.txt` status snapshots are **omitted** for backup cases: the runner runs those plain `clc` invocations without `CLC_NOW`, so the staleness age would be wall-clock-relative and drift daily. The deterministic Backups-status coverage lives in the **action** snapshot instead (a `clc status` call made inside the case script with `CLC_NOW` pinned → e.g. "just now"). Compare mode only checks snapshots that exist, so deleting the auto-generated `output.main.txt` after `--update` keeps the case green.

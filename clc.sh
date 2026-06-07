@@ -1168,6 +1168,23 @@ cmd_status() {
         fi
     fi
 
+    # Section 1.6: Backups staleness (only when targets are configured — absent
+    # otherwise so unconfigured snapshots stay byte-identical). The age is the lone
+    # wall-clock line in routine output (§6.3); pinned in tests via CLC_NOW.
+    local _bt; _bt="$(backup_targets)"
+    if [[ -n "${_bt}" ]]; then
+        echo
+        print_header "Backups"
+        local bname bkind
+        while IFS= read -r bname; do
+            [[ -n "${bname}" ]] || continue
+            bkind=$(backup_get "${bname}" kind)
+            printf "  %s %s(%s)%s  %s%s%s\n" \
+                "${bname}" "${CLR_MUTED}" "${bkind}" "${CLR_RESET}" \
+                "${CLR_MUTED}" "$(backup_age "${bname}")" "${CLR_RESET}"
+        done <<< "${_bt}"
+    fi
+
     # Section 2: Managed worktrees
     echo
     print_header "Managed worktrees"
@@ -1489,6 +1506,218 @@ cmd_unenroll() {
     cmd_status
 }
 
+# ── v2 backups ────────────────────────────────────────────────────────────────
+#
+# Backup targets (§4.9) are git-config subsections in the clc config file:
+#
+#   [clc "backup.<name>"]
+#       kind = remote | bundle
+#       url  = <git remote url>          ; kind=remote
+#       path = ~/path/to/store.bundle    ; kind=bundle (stored ~-relative)
+#       interval = <seconds>             ; optional per-target debounce override
+#
+# A successful (non-noop) sync triggers a debounced, backgrounded, fail-safe push
+# of the store to every target; `clc backup` forces an immediate synchronous push.
+# Two determinism seams keep this snapshot-testable (§6.2): CLC_SYNC_SYNC=1 makes
+# the post-sync push run synchronously (capturable); CLC_NOW=<epoch> pins ALL
+# wall-clock math (debounce comparison + staleness age). Target names must not
+# contain dots so config enumeration stays simple.
+
+# Default debounce when no interval is configured (15 min, §4.9).
+CLC_BACKUP_INTERVAL_DEFAULT=900
+
+# Single wall-clock source (§6.2 CLC_NOW seam). ALL time math goes through this.
+now_epoch() { echo "${CLC_NOW:-$(date +%s)}"; }
+
+# Expand a leading ~ to $HOME (paths are stored ~-relative; expand at read, §4.5).
+expand_tilde() {
+    local p="$1"
+    case "${p}" in
+        "~")    echo "${HOME}" ;;
+        # Quote the ~ in the prefix-strip pattern: bash performs tilde expansion
+        # inside ${p#~/} otherwise, so the leading ~ would not be stripped.
+        "~/"*)  echo "${HOME}/${p#"~/"}" ;;
+        *)      echo "${p}" ;;
+    esac
+}
+
+# Echo configured backup target names, one per line (nothing when none). Derived
+# from the `kind` key of each subsection; guarded so a missing config is inert.
+backup_targets() {
+    git config -f "$(clc_config_file)" --get-regexp '^clc\.backup\.[^.]+\.kind$' 2>/dev/null \
+        | awk '{print $1}' | sed -E 's/^clc\.backup\.//; s/\.kind$//' || true
+}
+
+# Read a per-target config value (empty + success when missing; safe under set -e).
+backup_get() {
+    local name="$1" key="$2"
+    git config -f "$(clc_config_file)" "clc.backup.${name}.${key}" 2>/dev/null || true
+}
+
+# Per-target debounce interval: target override, else global, else the default.
+backup_interval() {
+    local name="$1" v
+    v=$(backup_get "${name}" interval)
+    [[ -n "${v}" ]] && { echo "${v}"; return; }
+    v=$(config_get clc.backup.interval)
+    [[ -n "${v}" ]] && { echo "${v}"; return; }
+    echo "${CLC_BACKUP_INTERVAL_DEFAULT}"
+}
+
+# Path to a target's last-success stamp (holds the epoch of the last good push).
+backup_stamp_file() { echo "$(clc_state_dir)/backup/${1}.stamp"; }
+
+# Return 0 if a target is due (no stamp, or now - stamp >= interval); else 1.
+backup_due() {
+    local name="$1" stamp interval now last
+    stamp="$(backup_stamp_file "${name}")"
+    [[ -f "${stamp}" ]] || return 0
+    last=$(cat "${stamp}" 2>/dev/null || echo 0)
+    [[ -n "${last}" ]] || last=0
+    interval=$(backup_interval "${name}")
+    now=$(now_epoch)
+    [[ $(( now - last )) -ge ${interval} ]]
+}
+
+# Append a failure line to the backup log (timestamped via now_epoch) and, only
+# in a real interactive context (NOT under the test/determinism seams), optionally
+# raise a macOS notification. Tests set CLC_SYNC_SYNC/CLC_NOW, so no notify fires.
+backup_log_failure() {
+    local name="$1" msg="$2"
+    local log; log="$(clc_state_dir)/backup.log"
+    mkdir -p "$(dirname "${log}")"
+    printf '%s\t%s\t%s\n' "$(now_epoch)" "${name}" "${msg}" >> "${log}"
+    if [[ -z "${CLC_SYNC_SYNC:-}" && -z "${CLC_NOW:-}" ]] && command -v osascript >/dev/null 2>&1; then
+        osascript -e "display notification \"clc backup '${name}' failed\" with title \"clc\"" \
+            >/dev/null 2>&1 || true
+    fi
+}
+
+# Push the store to one target. Returns 0 on success, 1 on failure. On success,
+# rewrites the target's stamp (now_epoch); on failure, logs it.
+push_one_target() {
+    local name="$1"
+    local store kind; store="$(clc_store_dir)"
+    kind=$(backup_get "${name}" kind)
+    local ok=0
+    case "${kind}" in
+        remote)
+            local url; url=$(backup_get "${name}" url)
+            if [[ -z "${url}" ]]; then
+                backup_log_failure "${name}" "no url configured"; return 1
+            fi
+            # clc owns the backup → force-push every branch.
+            if git -C "${store}" push --force "${url}" '+refs/heads/*:refs/heads/*' \
+                >/dev/null 2>&1; then
+                ok=1
+            else
+                backup_log_failure "${name}" "git push failed (url=${url})"
+            fi
+            ;;
+        bundle)
+            local path; path=$(expand_tilde "$(backup_get "${name}" path)")
+            if [[ -z "${path}" ]]; then
+                backup_log_failure "${name}" "no path configured"; return 1
+            fi
+            mkdir -p "$(dirname "${path}")"
+            if git -C "${store}" bundle create "${path}.tmp" --all >/dev/null 2>&1; then
+                # Atomic .prev rotation (§4.9 / Nexus): never leaves zero valid bundles.
+                [[ -f "${path}" ]] && mv "${path}" "${path}.prev"
+                mv "${path}.tmp" "${path}"
+                ok=1
+            else
+                rm -f "${path}.tmp" 2>/dev/null || true
+                backup_log_failure "${name}" "git bundle create failed (path=${path})"
+            fi
+            ;;
+        *)
+            backup_log_failure "${name}" "unknown kind '${kind}'"; return 1
+            ;;
+    esac
+    if [[ ${ok} -eq 1 ]]; then
+        local stamp; stamp="$(backup_stamp_file "${name}")"
+        mkdir -p "$(dirname "${stamp}")"
+        now_epoch > "${stamp}"
+        return 0
+    fi
+    return 1
+}
+
+# Per-target results from the last push_all_targets, for clc backup's summary.
+# Lines: "<name>\t<status>" where status is pushed | failed | skipped.
+_BACKUP_RESULTS=()
+# Push all targets. force=1 ignores the debounce; force=0 skips non-due targets.
+push_all_targets() {
+    local force="$1" name
+    _BACKUP_RESULTS=()
+    while IFS= read -r name; do
+        [[ -n "${name}" ]] || continue
+        if [[ "${force}" != 1 ]] && ! backup_due "${name}"; then
+            _BACKUP_RESULTS+=("${name}"$'\t'"skipped")
+            continue
+        fi
+        if push_one_target "${name}"; then
+            _BACKUP_RESULTS+=("${name}"$'\t'"pushed")
+        else
+            _BACKUP_RESULTS+=("${name}"$'\t'"failed")
+        fi
+    done < <(backup_targets)
+}
+
+# Trigger a debounced backup after a successful sync, ONLY when targets exist.
+# CLC_SYNC_SYNC=1 → synchronous (capturable by the harness); otherwise the push
+# is backgrounded + fail-safe (§6.2): never blocks/hangs the commit, survives the
+# parent exit, leaves no zombies.
+maybe_trigger_backup() {
+    [[ -n "$(backup_targets)" ]] || return 0
+    if [[ -n "${CLC_SYNC_SYNC:-}" ]]; then
+        push_all_targets 0
+    else
+        ( push_all_targets 0 ) >/dev/null 2>&1 & disown 2>/dev/null || true
+    fi
+}
+
+# Render a last-push age for status, driven by now_epoch (so CLC_NOW pins it).
+# "never" when no stamp; otherwise a coarse, deterministic age.
+backup_age() {
+    local name="$1" stamp last now delta
+    stamp="$(backup_stamp_file "${name}")"
+    [[ -f "${stamp}" ]] || { echo "never"; return; }
+    last=$(cat "${stamp}" 2>/dev/null || echo 0)
+    [[ -n "${last}" ]] || last=0
+    now=$(now_epoch)
+    delta=$(( now - last ))
+    [[ ${delta} -lt 0 ]] && delta=0
+    if   [[ ${delta} -lt 60    ]]; then echo "just now"
+    elif [[ ${delta} -lt 3600  ]]; then echo "$(( delta / 60 ))m ago"
+    elif [[ ${delta} -lt 86400 ]]; then echo "$(( delta / 3600 ))h ago"
+    else                                echo "$(( delta / 86400 ))d ago"
+    fi
+}
+
+# `clc backup` — force an immediate synchronous push to ALL targets (ignores the
+# debounce). Deterministic per-target summary.
+cmd_backup() {
+    if [[ -z "$(backup_targets)" ]]; then
+        print_header "Backup"
+        echo "  ${CLR_MUTED}(no backup targets configured)${CLR_RESET}"
+        return 0
+    fi
+    store_init
+    push_all_targets 1
+
+    print_header "Backup"
+    local row name status
+    for row in ${_BACKUP_RESULTS[@]+"${_BACKUP_RESULTS[@]}"}; do
+        IFS=$'\t' read -r name status <<< "${row}"
+        case "${status}" in
+            pushed) printf "  %s  pushed\n" "${name}" ;;
+            failed) print_warning_line "${name}: failed" ;;
+            *)      printf "  %s  %s%s%s\n" "${name}" "${CLR_MUTED}" "${status}" "${CLR_RESET}" ;;
+        esac
+    done
+}
+
 # ── v2 sync command (hidden/experimental) ─────────────────────────────────────
 
 # Emit the single non-alarming peer-source warning to STDERR (§6.1). Surfaces
@@ -1539,6 +1768,9 @@ cmd_sync() {
         [[ "${current_worktree}" != "${main_worktree}" ]] && warn_peer_source "${current_worktree}"
         store_init >/dev/null 2>&1 || exit 0
         with_store_lock store_sync_project "${rel}" "${current_worktree}" >/dev/null 2>&1 || true
+        # Backup is debounced + backgrounded + fail-safe: a successful sync may
+        # trigger a push, but it must never block/hang the commit (§4.9/§6.2).
+        [[ "${_STORE_SYNC_RESULT}" == "synced" ]] && maybe_trigger_backup
         exit 0
     fi
 
@@ -1563,6 +1795,8 @@ cmd_sync() {
     else
         local n; n=$(collect_claude_files_in_dir "${current_worktree}" | grep -c . || true)
         echo "  ${n} Claude file(s) → store"
+        # Trigger a debounced backup after a real (non-noop) sync (§4.9/§6.2).
+        maybe_trigger_backup
     fi
 }
 
@@ -1604,6 +1838,8 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          mismatches. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
   ${CLR_BOLD}restore${CLR_RESET}                Restore Claude files from the stored state
                          to the current worktree. Prompts before making changes.
+  ${CLR_BOLD}backup${CLR_RESET}                 Force an immediate push of the central store to all
+                         configured backup targets ${CLR_MUTED}(remote and/or bundle)${CLR_RESET}.
 
 ${CLR_BOLD}Actions (Worktrees):${CLR_RESET}
   ${CLR_BOLD}new${CLR_RESET}${CLR_MUTED}|add${CLR_RESET} ${CLR_MUTED}[-n|--no-claude]${CLR_RESET} <name> ${CLR_MUTED}[<branch>]${CLR_RESET}
@@ -1708,6 +1944,7 @@ main() {
         pull)         cmd_pull ${cmd_args[@]+"${cmd_args[@]}"} ;;
         close)        cmd_close ${cmd_args[@]+"${cmd_args[@]}"} ;;
         sync)         cmd_sync ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        backup)       cmd_backup ${cmd_args[@]+"${cmd_args[@]}"} ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac
