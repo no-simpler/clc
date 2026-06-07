@@ -107,11 +107,6 @@ store_init() {
     git -C "${store}" config user.name "clc"
     git -C "${store}" config user.email "clc@localhost"
     git -C "${store}" config commit.gpgsign false
-    # The store mirrors the full brain (collect_claude_files_in_dir defines it),
-    # so it must NOT honor the user's global gitignore (core.excludesfile / the
-    # XDG ~/.config/git/ignore fallback) — otherwise globally-ignored brain files
-    # like .claude/settings.local.json would be silently dropped from the store.
-    git -C "${store}" config core.excludesfile /dev/null
 
     mkdir -p "${store}/.clc"
     printf '%s\n' \
@@ -224,22 +219,23 @@ store_sync_project() {
     done < <(git -C "${store}" ls-files -z -- "${rel}")
     rm -f "${subtmp}"
 
-    # Copy current brain files into the subtree and stage them.
+    # Copy current brain files into the subtree and stage them. The brain set is
+    # already filtered by collect_claude_files_in_dir to respect the project's
+    # .gitignore + global excludes (clc's own info/exclude disregarded), so the
+    # store never receives transitively-ignored files (vendor/…/CLAUDE.md) or
+    # per-machine ones (.claude/settings.local.json).
     while IFS= read -r f; do
         [[ -n "${f}" ]] || continue
         mkdir -p "$(dirname "${S}/${f}")"
         cp "${wt}/${f}" "${S}/${f}"
-        # -f: the store mirrors the full brain regardless of the user's gitignore
-        # (e.g. a globally-ignored .claude/settings.local.json must still be stored).
-        git -C "${store}" add -f -- "${S}/${f}"
+        git -C "${store}" add -- "${S}/${f}"
     done < "${Ftmp}"
     rm -f "${Ftmp}"
 
-    # Belt-and-suspenders, subtree-scoped ONLY (-f for the same reason as above).
-    # Tolerate a vanished subtree (empty-brain case: the explicit git rm above
-    # already removed it) — git would otherwise emit "fatal: pathspec … did not
-    # match any files" to stderr.
-    git -C "${store}" add -fA -- "${rel}" 2>/dev/null || true
+    # Belt-and-suspenders, subtree-scoped ONLY. Tolerate a vanished subtree
+    # (empty-brain case: the explicit git rm above already removed it) — git
+    # would otherwise emit "fatal: pathspec … did not match any files" to stderr.
+    git -C "${store}" add -A -- "${rel}" 2>/dev/null || true
 
     if git -C "${store}" diff --cached --quiet -- "${rel}"; then
         _STORE_SYNC_RESULT="noop"; return 0
@@ -513,7 +509,15 @@ _claude_item_git_managed() {
 
 # ── Storage helpers ───────────────────────────────────────────────────────────
 
-# Print relative paths of all Claude files in a directory (sorted, unique).
+# Print relative paths of the managed Claude files in a directory (sorted, unique).
+#
+# The brain definition (CLAUDE.md at any depth + a root .claude/) is collected via
+# find, then files the project itself gitignores are dropped: clc respects the
+# project's .gitignore files (any depth) and the user's global excludes, so
+# transitively-ignored files (e.g. a dependency's vendor/…/CLAUDE.md) and
+# per-machine ones (.claude/settings.local.json) stay out of the managed brain.
+# clc's OWN .git/info/exclude patterns are deliberately disregarded — otherwise
+# the brain, which clc locally-ignores on purpose, would never be stored.
 collect_claude_files_in_dir() {
     local base="$1"
     local -a results=()
@@ -524,7 +528,30 @@ collect_claude_files_in_dir() {
     while IFS= read -r f; do results+=("${f#${base}/}"); done \
         < <(_find_claude_md_files "${base}")
     [[ ${#results[@]} -eq 0 ]] && return
-    printf '%s\n' "${results[@]}" | sort -u
+
+    local all ignored
+    all=$(printf '%s\n' "${results[@]}" | sort -u)
+    ignored=$(printf '%s\n' "${all}" | _brain_ignored_paths "${base}")
+    if [[ -n "${ignored}" ]]; then
+        comm -23 <(printf '%s\n' "${all}") <(printf '%s\n' "${ignored}" | sort -u)
+    else
+        printf '%s\n' "${all}"
+    fi
+}
+
+# Echo, from relative paths read on stdin, the subset that the project at $1
+# gitignores via its .gitignore files or the user's global excludes — DISREGARDING
+# clc's own .git/info/exclude. Evaluated through a throwaway gitdir whose
+# info/exclude is empty, layered over the same work tree, so only .gitignore and
+# the global core.excludesfile apply (clc's /.claude/ blanket can't shadow a
+# lower-precedence global rule such as **/.claude/settings.local.json this way).
+_brain_ignored_paths() {
+    local base="$1" gd
+    gd=$(mktemp -d)
+    git --git-dir="${gd}" init -q 2>/dev/null
+    git --git-dir="${gd}" --work-tree="${base}" -C "${base}" \
+        -c core.quotePath=false check-ignore --stdin 2>/dev/null || true
+    rm -rf "${gd}"
 }
 
 # Find CLAUDE.md files in a directory, excluding .git internals and submodule directories.
