@@ -1,0 +1,13 @@
+Repository (parent dir: %%PARENT_DIR%%)
+  * wrong  (main)
+      Claude files not ignored
+
+Enrollment
+  enrolled
+  hooks: (none installed)
+
+Managed worktrees
+  <none>
+
+Unmanaged worktrees
+  <none>

@@ -1,0 +1,8 @@
+Doctor
+  %%PARENT_DIR_HOME%%/drift  origin drift
+      registry: git@example.com:me/drift.git
+      local:    git@example.com:me/MOVED.git
+      (run 'clc relink')
+  %%PARENT_DIR_HOME%%/gone  missing
+      (run 'clc clone' / 'clc adopt')
+  %%PARENT_DIR_HOME%%/ok  ok

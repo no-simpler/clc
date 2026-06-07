@@ -1,0 +1,10 @@
+Clone
+  <proj>  cloned
+  <wrong>  skipped
+      exists (skipped, not clc-managed)
+
+proj brain deployed: # project instructions
+proj exclude has CLAUDE.md: yes
+proj post-commit hook: present
+wrong/ untouched: DO NOT CLOBBER
+wrong/ no brain: clean

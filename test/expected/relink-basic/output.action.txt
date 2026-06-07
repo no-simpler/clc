@@ -1,0 +1,38 @@
+Relinked
+  %%PARENT_DIR_HOME%%/old → %%PARENT_DIR_HOME%%/moved
+
+Repository (parent dir: %%PARENT_DIR%%)
+  * moved  (main)
+
+Enrollment
+  enrolled
+  hooks: post-commit, post-merge, post-checkout
+
+Managed worktrees
+  <none>
+
+Unmanaged worktrees
+  <none>
+
+registry:
+# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]
+<new>	git@example.com:me/proj.git
+
+store tracked files:
+.clc/registry
+<new>/CLAUDE.md
+
+.git/info/exclude:
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+CLAUDE.md
+/.claude/
+
+hooks present:
+  post-commit
+  post-merge
+  post-checkout

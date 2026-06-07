@@ -1,0 +1,9 @@
+Adopt
+  <gone>  missing
+      (run 'clc clone')
+  <here>  adopted
+
+here brain redeployed: # project instructions
+here exclude has CLAUDE.md: yes
+here post-commit hook: present
+gone/ not created: absent

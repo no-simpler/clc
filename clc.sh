@@ -1800,6 +1800,286 @@ cmd_sync() {
     fi
 }
 
+# ── v2 cold-start / doctor ────────────────────────────────────────────────────
+#
+# Cross-machine reconciliation (§6.4). OVERRIDING POLICY: surface, don't
+# auto-apply. Invariants: (1) never overwrite or `mv` a non-empty directory;
+# (2) never auto-move a code working tree; (3) every reconciliation is an EXPLICIT
+# command — `clc doctor` only REPORTS, never acts. All output is content-derived
+# (HOME-relative paths + deterministic origins; no SHAs/dates).
+
+# Echo a worktree's configured origin remote URL (empty + success when absent).
+repo_origin() {
+    git -C "$1" config --get remote.origin.url 2>/dev/null || true
+}
+
+# Return 0 if the path is absent OR an empty directory (no entries); else 1.
+# bash 3.2-safe: `ls -A` lists all but . and .. — empty output means empty.
+dir_is_empty() {
+    local path="$1"
+    [[ -e "${path}" ]] || return 0
+    [[ -d "${path}" ]] || return 1
+    [[ -z "$(ls -A "${path}" 2>/dev/null)" ]]
+}
+
+# Copy every brain file from the store mirror into a worktree (§6.4 deploy step).
+# Only ever COPIES — never deletes worktree files. Safe to run on a fresh clone
+# (no brain present) or to re-deploy. No-op when the mirror has no brain files.
+deploy_brain() {
+    local wt="$1" mirror_dir="$2"
+    local f
+    while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        mkdir -p "$(dirname "${wt}/${f}")"
+        cp "${mirror_dir}/${f}" "${wt}/${f}"
+    done < <(collect_claude_files_in_dir "${mirror_dir}")
+}
+
+# `clc doctor` — READ-ONLY health check (§6.4). Reports + suggests; never acts.
+cmd_doctor() {
+    local store; store="$(clc_store_dir)"
+    if [[ ! -d "${store}/.git" || ! -f "$(registry_file)" ]]; then
+        print_header "Doctor"
+        echo "  ${CLR_MUTED}(no store yet — nothing enrolled)${CLR_RESET}"
+        return 0
+    fi
+
+    print_header "Doctor"
+    local rel origin localpath actual_origin
+    while IFS=$'\t' read -r rel origin _rest; do
+        [[ -n "${rel}" ]] || continue
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            printf "  %s  missing\n" "${rel}"
+            printf "      %s(run 'clc clone' / 'clc adopt')%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+        else
+            actual_origin="$(repo_origin "${localpath}")"
+            if [[ -n "${origin}" && "${actual_origin}" != "${origin}" ]]; then
+                printf "  %s  origin drift\n" "${rel}"
+                printf "      %sregistry: %s%s\n" "${CLR_MUTED}" "${origin}" "${CLR_RESET}"
+                printf "      %slocal:    %s%s\n" "${CLR_MUTED}" "${actual_origin}" "${CLR_RESET}"
+                printf "      %s(run 'clc relink')%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+            else
+                printf "  %s  ok\n" "${rel}"
+            fi
+        fi
+    done < <(registry_read)
+
+    # If inside a git repo, also report the current repo if it is locally enrolled
+    # (has clc ignore patterns and/or hooks) but is absent from the registry. This
+    # is the practical "locally-enrolled repo absent from the registry" check — we
+    # cannot scan the whole filesystem.
+    local main_gitdir main_worktree
+    if main_gitdir=$(git_main_gitdir 2>/dev/null) \
+        && main_worktree=$(git_main_worktree "${main_gitdir}" 2>/dev/null); then
+        local cur_rel="${main_worktree#${HOME}/}"
+        if [[ "${cur_rel}" != "${main_worktree}" ]] && ! is_enrolled "${main_worktree}"; then
+            local locally_enrolled=0
+            [[ "$(claude_local_ignore_state "${main_gitdir}")" != "no" ]] && locally_enrolled=1
+            local h
+            for h in ${CLC_HOOKS}; do
+                hook_installed "${main_gitdir}" "${h}" && locally_enrolled=1
+            done
+            if [[ ${locally_enrolled} -eq 1 ]]; then
+                printf "  %s  unregistered\n" "${cur_rel}"
+                printf "      %s(run 'clc enroll')%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+            fi
+        fi
+    fi
+}
+
+# Under-lock helper for relink: rewrite the registry key (old → new) + commit,
+# then move the store subtree if tracked (guarded: never clobber a non-empty new
+# subtree) + commit.
+_store_relink() {
+    local old="$1" new="$2" origin="$3"
+    local store; store="$(clc_store_dir)"
+
+    # Pre-flight clobber guard: decide whether the old subtree must move and refuse
+    # BEFORE mutating anything (so a refused relink leaves the store untouched — no
+    # half-rewritten registry). Moving over a non-empty new subtree is refused.
+    local move_subtree=0
+    if git -C "${store}" ls-files -- "${old}" | grep -q .; then
+        move_subtree=1
+        if [[ -e "${store}/${new}" ]] && ! dir_is_empty "${store}/${new}"; then
+            die "store already has a non-empty subtree at '${new}' — refusing to overwrite"
+        fi
+    fi
+
+    # Registry re-key.
+    registry_remove "${old}"
+    registry_add "${new}" "${origin}"
+    git -C "${store}" add -- .clc/registry
+    git -C "${store}" diff --cached --quiet \
+        || git -C "${store}" commit -q -m "relink: ${old} -> ${new}"
+
+    # Move the store subtree (the guard above already passed).
+    if [[ ${move_subtree} -eq 1 ]]; then
+        mkdir -p "$(dirname "${store}/${new}")"
+        git -C "${store}" mv "${old}" "${new}" >/dev/null 2>&1 \
+            || die "failed to move store subtree '${old}' -> '${new}'"
+        git -C "${store}" diff --cached --quiet \
+            || git -C "${store}" commit -q -m "relink: move subtree ${old} -> ${new}"
+    fi
+}
+
+# `clc relink [<old-home-relative-path>]` — move handling (§4.4 / §6.4).
+# Run from the repo's NEW location after moving it.
+cmd_relink() {
+    local old_arg=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) die "unknown option for 'relink': $1" ;;
+            *)  if [[ -z "${old_arg}" ]]; then old_arg="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+
+    local main_gitdir main_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
+
+    local new_rel="${main_worktree#${HOME}/}"
+    [[ "${new_rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+    local origin; origin="$(repo_origin "${main_worktree}")"
+
+    [[ -d "$(clc_store_dir)/.git" ]] || die "no store yet — nothing to relink"
+
+    # Determine the OLD registry entry to relink.
+    local old=""
+    if [[ -n "${old_arg}" ]]; then
+        # Explicit old path: must exist in the registry.
+        local p _o
+        while IFS=$'\t' read -r p _o; do
+            [[ "${p}" == "${old_arg}" ]] && { old="${old_arg}"; break; }
+        done < <(registry_read)
+        [[ -n "${old}" ]] || die "no registry entry for '${old_arg}'"
+    else
+        # Auto-detect: entries whose origin matches AND whose registered path no
+        # longer exists on disk. Require exactly one match.
+        local p reg_origin matches=0 candidate=""
+        while IFS=$'\t' read -r p reg_origin; do
+            [[ -n "${p}" ]] || continue
+            [[ "${p}" == "${new_rel}" ]] && continue   # the new location itself
+            [[ -n "${origin}" && "${reg_origin}" == "${origin}" ]] || continue
+            dir_is_empty "${HOME}/${p}" || continue     # old path gone (absent/empty)
+            matches=$(( matches + 1 ))
+            candidate="${p}"
+        done < <(registry_read)
+        if [[ ${matches} -eq 0 ]]; then
+            die "could not auto-detect the old path (no matching origin with a vanished path) — pass it explicitly: clc relink <old-home-relative-path>"
+        elif [[ ${matches} -gt 1 ]]; then
+            die "ambiguous: multiple registry entries match this origin with a vanished path — pass the old path explicitly: clc relink <old-home-relative-path>"
+        fi
+        old="${candidate}"
+    fi
+
+    [[ "${old}" != "${new_rel}" ]] || die "registry already keys this location ('${new_rel}') — nothing to relink"
+
+    with_store_lock _store_relink "${old}" "${new_rel}" "${origin}"
+
+    # Belt-and-suspenders: re-ignore + reinstall hooks at the new gitdir (the moved
+    # repo carried its own .git; these are idempotent).
+    _ignore_patterns "${main_gitdir}" >/dev/null
+    install_hooks "${main_gitdir}"
+
+    print_header "Relinked"
+    printf "  %s → %s\n" "${old}" "${new_rel}"
+    echo
+
+    cmd_status
+}
+
+# Deploy the brain + local-gitignore + install hooks for a cold-start entry.
+# Pure side-effect helper shared by clone/adopt. Safe: deploy_brain only copies.
+_cold_deploy() {
+    local localpath="$1" rel="$2"
+    local mirror_dir; mirror_dir="$(clc_store_dir)/${rel}"
+    [[ -d "${mirror_dir}" ]] && deploy_brain "${localpath}" "${mirror_dir}"
+    local main_gitdir
+    if main_gitdir=$(cd "${localpath}" && git_main_gitdir 2>/dev/null); then
+        _ignore_patterns "${main_gitdir}" >/dev/null
+        install_hooks "${main_gitdir}"
+    fi
+}
+
+# `clc clone` — guarded cold-start (§6.4). Clones absent/empty entries, adopts
+# matching present ones, skips (never clobbers) wrong/unknown dirs.
+cmd_clone() {
+    local store; store="$(clc_store_dir)"
+    if [[ ! -d "${store}/.git" || ! -f "$(registry_file)" ]]; then
+        print_header "Clone"
+        echo "  ${CLR_MUTED}(no store yet — nothing to clone)${CLR_RESET}"
+        return 0
+    fi
+
+    print_header "Clone"
+    local rel origin localpath actual_origin
+    while IFS=$'\t' read -r rel origin _rest; do
+        [[ -n "${rel}" ]] || continue
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            if [[ -z "${origin}" ]]; then
+                printf "  %s  skipped\n" "${rel}"
+                print_warning_line "no origin"
+                continue
+            fi
+            # Clone into the empty/absent dir (git clone refuses a non-empty dir).
+            if git clone "${origin}" "${localpath}" >/dev/null 2>&1; then
+                _cold_deploy "${localpath}" "${rel}"
+                printf "  %s  cloned\n" "${rel}"
+            else
+                printf "  %s  skipped\n" "${rel}"
+                print_warning_line "clone failed"
+            fi
+        else
+            actual_origin="$(repo_origin "${localpath}")"
+            if [[ -d "${localpath}/.git" || -f "${localpath}/.git" ]] \
+                && { [[ -z "${origin}" ]] || [[ "${actual_origin}" == "${origin}" ]]; }; then
+                _cold_deploy "${localpath}" "${rel}"
+                printf "  %s  adopted\n" "${rel}"
+            else
+                printf "  %s  skipped\n" "${rel}"
+                print_warning_line "exists (skipped, not clc-managed)"
+            fi
+        fi
+    done < <(registry_read)
+}
+
+# `clc adopt` — adopt-only cold-start (§6.4). Deploys into present matching repos;
+# never clones; reports missing entries; skips wrong/unknown dirs.
+cmd_adopt() {
+    local store; store="$(clc_store_dir)"
+    if [[ ! -d "${store}/.git" || ! -f "$(registry_file)" ]]; then
+        print_header "Adopt"
+        echo "  ${CLR_MUTED}(no store yet — nothing to adopt)${CLR_RESET}"
+        return 0
+    fi
+
+    print_header "Adopt"
+    local rel origin localpath actual_origin
+    while IFS=$'\t' read -r rel origin _rest; do
+        [[ -n "${rel}" ]] || continue
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            printf "  %s  missing\n" "${rel}"
+            printf "      %s(run 'clc clone')%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+        else
+            actual_origin="$(repo_origin "${localpath}")"
+            if [[ -d "${localpath}/.git" || -f "${localpath}/.git" ]] \
+                && { [[ -z "${origin}" ]] || [[ "${actual_origin}" == "${origin}" ]]; }; then
+                _cold_deploy "${localpath}" "${rel}"
+                printf "  %s  adopted\n" "${rel}"
+            else
+                printf "  %s  skipped\n" "${rel}"
+                print_warning_line "exists (skipped, not clc-managed)"
+            fi
+        fi
+    done < <(registry_read)
+}
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -1867,6 +2147,20 @@ ${CLR_BOLD}Actions (Transplant):${CLR_RESET}
   ${CLR_BOLD}close${CLR_RESET} ${CLR_MUTED}[-c|--commit] [-k|--keep-branch]${CLR_RESET} <name>
                          Same as pull, then removes the peer worktree and
                          deletes its branch (like rm).
+
+${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
+  ${CLR_BOLD}doctor${CLR_RESET}                 Report cross-machine drift for every enrolled repo
+                         ${CLR_MUTED}(missing / origin drift / unregistered). Read-only;
+                         suggests the fix command, never acts.${CLR_RESET}
+  ${CLR_BOLD}relink${CLR_RESET} ${CLR_MUTED}[<old-home-relative-path>]${CLR_RESET}
+                         Re-key a moved repo: run from its new location to
+                         rewrite the registry and move its store subtree.
+                         Auto-detects the old path by origin when omitted.
+  ${CLR_BOLD}clone${CLR_RESET}                  Cold-start from the restored store: clone each
+                         registered repo to its path, deploy the brain, and
+                         install hooks. ${CLR_MUTED}Never clobbers a non-empty dir.${CLR_RESET}
+  ${CLR_BOLD}adopt${CLR_RESET}                  Like clone but never clones: deploy the brain +
+                         hooks only into already-present matching repos.
 
 ${CLR_BOLD}Flags:${CLR_RESET}
   ${CLR_BOLD}-k, --keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune, close)${CLR_RESET} Keep the worktree's git branch
@@ -1945,6 +2239,10 @@ main() {
         close)        cmd_close ${cmd_args[@]+"${cmd_args[@]}"} ;;
         sync)         cmd_sync ${cmd_args[@]+"${cmd_args[@]}"} ;;
         backup)       cmd_backup ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        doctor)       cmd_doctor ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        relink)       cmd_relink ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        clone)        cmd_clone ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        adopt)        cmd_adopt ${cmd_args[@]+"${cmd_args[@]}"} ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac

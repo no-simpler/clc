@@ -1,0 +1,12 @@
+Repository (parent dir: %%PARENT_DIR%%)
+  * moved  (main)
+
+Enrollment
+  enrolled
+  hooks: post-commit, post-merge, post-checkout
+
+Managed worktrees
+  <none>
+
+Unmanaged worktrees
+  <none>
