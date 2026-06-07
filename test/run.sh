@@ -92,14 +92,28 @@ normalize_output() {
     #
     # When the parent path is not under $HOME (disp == abs): both forms are the same,
     # so everything is replaced with %%PARENT_DIR%% and HOME-shortening is not verified.
-    local out="$1" parent_disp="$2" parent_abs="$3"
+    local out="$1" parent_disp="$2" parent_abs="$3" parent_home="${4-}"
     if [[ "${parent_disp}" != "${parent_abs}" ]]; then
         out="${out//${parent_disp}/%%PARENT_DIR%%}"
         out="${out//${parent_abs}/%%PARENT_DIR_ABS%%}"
     else
         out="${out//${parent_abs}/%%PARENT_DIR%%}"
     fi
+    # HOME-relative parent form (no leading ~ or /). The v2 store mirrors project
+    # subtrees under a HOME-relative path, so neither placeholder above matches.
+    if [[ -n "${parent_home}" && "${parent_home}" != "${parent_abs}" ]]; then
+        out="${out//${parent_home}/%%PARENT_DIR_HOME%%}"
+    fi
+    # MD5 first (anchored by its '@' prefix), then the shared SHA scrub so the
+    # 32-hex MD5 component is already replaced and not re-clobbered.
+    #
+    # The SHA scrub uses explicit boundary chars (start/end or any char that is
+    # not hex and not '.') rather than \b, because BSD/macOS sed does not support
+    # \b. Excluding '.' deliberately leaves git's "index <sha>..<sha>" diff lines
+    # alone (those are content-derived and already stable in snapshots); standalone
+    # SHAs that history commands emit (e.g. "commit <sha>") are scrubbed.
     out=$(printf '%s' "${out}" | sed -E 's/@[0-9a-f]{32}/@%%MD5%%/g')
+    out=$(printf '%s' "${out}" | sed -E 's/(^|[^0-9a-f.])[0-9a-f]{7,40}([^0-9a-f.]|$)/\1%%SHA%%\2/g')
     printf '%s' "${out}"
 }
 
@@ -148,9 +162,10 @@ run_case() {
     export GIT_CONFIG_SYSTEM=/dev/null
 
     # Parent dir displayed in status output (same logic as short_path in clc.sh).
-    local parent_dir_abs parent_dir_disp
+    local parent_dir_abs parent_dir_disp parent_dir_home
     parent_dir_abs="${case_playground}"
     parent_dir_disp="~${case_playground#${HOME}}"
+    parent_dir_home="${case_playground#${HOME}/}"
 
     # Step 1: Run case script, capture stdout and stderr.
     local action_out
@@ -160,7 +175,7 @@ run_case() {
     # On --update: write if stdout is non-empty. On compare: check if file exists.
     local action_snapshot="${case_expected}/output.action.txt"
     local action_normalized
-    action_normalized=$(normalize_output "${action_out}" "${parent_dir_disp}" "${parent_dir_abs}")
+    action_normalized=$(normalize_output "${action_out}" "${parent_dir_disp}" "${parent_dir_abs}" "${parent_dir_home}")
     if [[ ${OPT_UPDATE} -eq 1 && -n "${action_out}" ]]; then
         check_snapshot "${case_name}/action" "${action_snapshot}" "${action_normalized}"
     elif [[ -f "${action_snapshot}" ]]; then
@@ -176,7 +191,7 @@ run_case() {
             wt=$(basename "${wt_dir%/}")
             snapshot="${case_expected}/output.${wt}.txt"
             actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color --no-gpg 2>&1) || true
-            wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
+            wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}" "${parent_dir_home}")
             check_snapshot "${case_name}/${wt}" "${snapshot}" "${wt_normalized}"
         done
     else
@@ -190,7 +205,7 @@ run_case() {
             wt_name="${wt_name%.txt}"
             wt_dir="${case_playground}/${wt_name}"
             actual=$(cd "${wt_dir}" && "$BASH" "${CLC}" --no-color --no-gpg 2>&1) || true
-            wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}")
+            wt_normalized=$(normalize_output "${actual}" "${parent_dir_disp}" "${parent_dir_abs}" "${parent_dir_home}")
             check_snapshot "${case_name}/${wt_name}" "${snapshot}" "${wt_normalized}"
         done
     fi

@@ -72,6 +72,152 @@ config_set() { mkdir -p "$(clc_config_dir)"; git config -f "$(clc_config_file)" 
 config_list() { git config -f "$(clc_config_file)" --list 2>/dev/null || true; }
 
 
+# ── v2 store ──────────────────────────────────────────────────────────────────
+#
+# The central store is a non-bare git repo whose working tree mirrors each
+# enrolled project's second brain under a HOME-relative path (§4.1). This phase
+# (P2) builds the store + sync machinery in parallel to the legacy ~/.clc/saved
+# snapshots; the legacy save/restore/compare/diff commands are untouched.
+
+# Path to the central store git repo.
+clc_store_dir() { echo "$(clc_data_dir)/store"; }
+
+# Path to the registry/manifest inside the store (committed; §4.3).
+registry_file() { echo "$(clc_store_dir)/.clc/registry"; }
+
+# Initialize the store git repo if not already present (idempotent).
+# Stamps a fixed clc identity + gpgsign=false into the store's OWN .git/config so
+# every store commit is unsigned with a stable author/committer (no per-commit -c
+# needed). Seeds the registry and makes the initial commit with real wall-clock
+# dates (tests pin them via GIT_*_DATE env).
+store_init() {
+    local store; store="$(clc_store_dir)"
+    [[ -d "${store}/.git" ]] && return 0
+
+    git init -q "${store}"
+    git -C "${store}" config user.name "clc"
+    git -C "${store}" config user.email "clc@localhost"
+    git -C "${store}" config commit.gpgsign false
+
+    mkdir -p "${store}/.clc"
+    printf '%s\n' \
+        '# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]' \
+        > "$(registry_file)"
+
+    git -C "${store}" add -A
+    git -C "${store}" commit -q -m "init store"
+}
+
+# Run a command holding a mandatory advisory lock on the store (§4.10).
+# mkdir-based for macOS portability (no flock). 30s timeout; releases on failure.
+with_store_lock() {
+    local lockdir; lockdir="$(clc_state_dir)/locks/store"
+    mkdir -p "$(dirname "${lockdir}")"
+    local waited=0
+    while ! mkdir "${lockdir}" 2>/dev/null; do
+        sleep 0.1
+        waited=$(( waited + 1 ))
+        [[ ${waited} -ge 300 ]] && die "could not acquire store lock (another clc running?)"
+    done
+    local rc=0
+    "$@" || rc=$?
+    rmdir "${lockdir}" 2>/dev/null || true
+    return ${rc}
+}
+
+# Emit registry data lines (skip header/blank). Parse with:
+#   while IFS=$'\t' read -r path origin _; do …; done
+registry_read() {
+    grep -v '^#' "$(registry_file)" 2>/dev/null | grep -v '^[[:space:]]*$' || true
+}
+
+# Add or update a registry entry. Idempotent (identical line = no-op; same path
+# with a new origin replaces the line). Sorted-on-write, atomic. Callers MUST
+# hold with_store_lock and commit the mutation themselves (helper is pure).
+registry_add() {
+    local rel="$1" origin="$2"
+    local reg; reg="$(registry_file)"
+    mkdir -p "$(dirname "${reg}")"
+    {
+        printf '%s\n' \
+            '# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]'
+        {
+            registry_read | while IFS=$'\t' read -r path origin_old rest; do
+                [[ "${path}" == "${rel}" ]] && continue
+                printf '%s\t%s' "${path}" "${origin_old}"
+                [[ -n "${rest}" ]] && printf '\t%s' "${rest}"
+                printf '\n'
+            done
+            printf '%s\t%s\n' "${rel}" "${origin}"
+        } | sort
+    } > "${reg}.tmp"
+    mv "${reg}.tmp" "${reg}"
+}
+
+# Remove a registry entry by path (no-op if absent). Sorted-on-write, atomic.
+# Callers MUST hold with_store_lock and commit the mutation themselves.
+registry_remove() {
+    local rel="$1"
+    local reg; reg="$(registry_file)"
+    mkdir -p "$(dirname "${reg}")"
+    {
+        printf '%s\n' \
+            '# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]'
+        registry_read | while IFS=$'\t' read -r path origin_old rest; do
+            [[ "${path}" == "${rel}" ]] && continue
+            printf '%s\t%s' "${path}" "${origin_old}"
+            [[ -n "${rest}" ]] && printf '\t%s' "${rest}"
+            printf '\n'
+        done | sort
+    } > "${reg}.tmp"
+    mv "${reg}.tmp" "${reg}"
+}
+
+# Re-materialize a project's second brain into the store subtree and commit it
+# (§4.2 executable spec, VERBATIM). Subtree-scoped + delete-aware. MUST be called
+# under with_store_lock. rel = HOME-relative project path (store mirror subdir);
+# wt = source worktree. Sets _STORE_SYNC_RESULT to "synced" or "noop".
+_STORE_SYNC_RESULT=""   # "synced" | "noop"
+store_sync_project() {
+    local rel="$1" wt="$2"
+    local store S Ftmp
+    store="$(clc_store_dir)"
+    S="${store}/${rel}"
+    mkdir -p "${S}"
+
+    Ftmp=$(mktemp)
+    collect_claude_files_in_dir "${wt}" > "${Ftmp}"   # brain files, relative to wt
+
+    # Drop orphans: tracked files under rel that are no longer in the brain.
+    while IFS= read -r -d '' t; do
+        local t_rel="${t#${rel}/}"
+        if ! grep -qxF "${t_rel}" "${Ftmp}"; then
+            git -C "${store}" rm -q -- "${t}" >/dev/null 2>&1 || true
+        fi
+    done < <(git -C "${store}" ls-files -z -- "${rel}")
+
+    # Copy current brain files into the subtree and stage them.
+    while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        mkdir -p "$(dirname "${S}/${f}")"
+        cp "${wt}/${f}" "${S}/${f}"
+        git -C "${store}" add -- "${S}/${f}"
+    done < "${Ftmp}"
+    rm -f "${Ftmp}"
+
+    # Belt-and-suspenders, subtree-scoped ONLY. Tolerate a vanished subtree
+    # (empty-brain case: the explicit git rm above already removed it) — git
+    # would otherwise emit "fatal: pathspec … did not match any files" to stderr.
+    git -C "${store}" add -A -- "${rel}" 2>/dev/null || true
+
+    if git -C "${store}" diff --cached --quiet -- "${rel}"; then
+        _STORE_SYNC_RESULT="noop"; return 0
+    fi
+    git -C "${store}" commit -q -m "sync: ${rel}"
+    _STORE_SYNC_RESULT="synced"; return 0
+}
+
+
 # ── Claude-file state detection ───────────────────────────────────────────────
 
 # Exact patterns we look for in ignore files (slashes significant).
@@ -1066,6 +1212,33 @@ cmd_close() {
     fi
 }
 
+# ── v2 sync command (hidden/experimental) ─────────────────────────────────────
+
+# Sync the current worktree's second brain into the central git store (§6.1:
+# current-worktree-wins). Hidden/experimental this phase: wired in main()'s
+# dispatch but intentionally absent from usage()/--help.
+cmd_sync() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
+
+    # Identity = main worktree's HOME-relative path. Error, never guess, if outside $HOME.
+    local rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+
+    store_init
+    with_store_lock store_sync_project "${rel}" "${current_worktree}"
+
+    print_header "Synced"
+    if [[ "${_STORE_SYNC_RESULT}" == "noop" ]]; then
+        echo "  ${CLR_MUTED}(store already up to date)${CLR_RESET}"
+    else
+        local n; n=$(collect_claude_files_in_dir "${current_worktree}" | grep -c . || true)
+        echo "  ${n} Claude file(s) → store"
+    fi
+}
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -1198,6 +1371,7 @@ main() {
         prune|clean)  cmd_prune ${cmd_args[@]+"${cmd_args[@]}"} ;;
         pull)         cmd_pull ${cmd_args[@]+"${cmd_args[@]}"} ;;
         close)        cmd_close ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        sync)         cmd_sync ${cmd_args[@]+"${cmd_args[@]}"} ;;
         *) echo "clc: unknown action: ${action}" >&2
            echo "Try 'clc --help' for usage." >&2; exit 1 ;;
     esac

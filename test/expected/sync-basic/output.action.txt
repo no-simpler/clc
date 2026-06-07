@@ -1,0 +1,10 @@
+Synced
+  3 Claude file(s) → store
+Synced
+  (store already up to date)
+
+store tracked files:
+.clc/registry
+<project>/.claude/settings.json
+<project>/CLAUDE.md
+<project>/docs/CLAUDE.md

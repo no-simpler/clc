@@ -63,7 +63,9 @@ The runner normalizes machine-specific paths before comparing against snapshots:
 
 - `%%PARENT_DIR%%` — the parent directory of the repo's managed worktrees, in `~`-shortened form. Used for **display paths** that `clc` emits via `short_path`. If `clc` fails to shorten a path, the absolute form appears in the output instead and the snapshot will not match (intentional: this is how the test detects the regression).
 - `%%PARENT_DIR_ABS%%` — same directory in absolute form, for **raw file content** that is not processed by `short_path` (e.g. `full-path.txt`).
-- `%%MD5%%` — the MD5 hash component in a storage directory name.
+- `%%PARENT_DIR_HOME%%` — the same directory in **HOME-relative** form (no leading `~` or `/`). The v2 git store mirrors each project's second brain under a HOME-relative subtree path, which neither of the two placeholders above matches; this covers store/registry subtree paths.
+- `%%MD5%%` — the MD5 hash component in a storage directory name (32 hex chars, anchored by its `@` prefix).
+- `%%SHA%%` — a git object SHA (7–40 hex chars) that history-surfacing output emits, e.g. `commit <sha>`. Applied as a shared scrub in `run.sh` after the `%%MD5%%` replacement so the MD5 component is not re-clobbered. The scrub deliberately leaves git's `index <sha>..<sha>` diff lines alone (those are content-derived and stable) and avoids `\b` for BSD/macOS-sed portability.
 
 ## Non-deterministic output
 
