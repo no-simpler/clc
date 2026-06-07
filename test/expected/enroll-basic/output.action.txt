@@ -1,0 +1,42 @@
+Enrolled
+  registered
+  hooks: post-commit, post-merge, post-checkout
+  brain: 2 Claude file(s) → store
+
+Repository (parent dir: %%PARENT_DIR%%)
+  * main  (main)
+
+Enrollment
+  enrolled
+  hooks: post-commit, post-merge, post-checkout
+
+Managed worktrees
+  <none>
+
+Unmanaged worktrees
+  <none>
+
+.git/info/exclude:
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+CLAUDE.md
+/.claude/
+
+post-commit hook:
+#!/usr/bin/env bash
+# >>> clc managed >>>
+"%%CLC%%" sync --from-hook >/dev/null 2>&1 || true
+# <<< clc managed <<<
+
+registry:
+# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]
+%%PARENT_DIR_HOME%%/main	git@example.com:me/proj.git
+
+store tracked files:
+.clc/registry
+<project>/.claude/settings.json
+<project>/CLAUDE.md

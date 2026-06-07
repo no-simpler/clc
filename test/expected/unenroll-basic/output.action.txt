@@ -1,0 +1,28 @@
+Unenrolled
+  deregistered
+  hooks removed
+  brain dropped from store
+
+Repository (parent dir: %%PARENT_DIR%%)
+  * main  (main) (dirty)
+      Claude files not ignored
+
+Managed worktrees
+  <none>
+
+Unmanaged worktrees
+  <none>
+
+.git/info/exclude contains CLC patterns:
+  no
+
+hook files present:
+  post-commit: no
+  post-merge: no
+  post-checkout: no
+
+registry:
+# clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]
+
+store tracked files:
+.clc/registry

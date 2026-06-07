@@ -41,6 +41,15 @@ need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 # Shorten a path by replacing $HOME prefix with ~.
 short_path() { echo "~${1#${HOME}}"; }
 
+# Join the remaining args with the first arg as separator.
+_join() {
+    local sep="$1"; shift
+    [[ $# -eq 0 ]] && return
+    local out="$1"; shift
+    for x in "$@"; do out+="${sep}${x}"; done
+    echo "${out}"
+}
+
 # Print a section header with optional subtitle on the same line.
 print_header() {
     local heading="$1" subtitle="${2-}"
@@ -215,6 +224,101 @@ store_sync_project() {
     fi
     git -C "${store}" commit -q -m "sync: ${rel}"
     _STORE_SYNC_RESULT="synced"; return 0
+}
+
+
+# ── v2 hooks ──────────────────────────────────────────────────────────────────
+#
+# Hooks are per-`.git` (shared across worktrees) so they install ONCE at the main
+# gitdir. Each managed hook gets a sentinel-marked block appended without
+# clobbering pre-existing user content; composes with husky/lefthook/core.hooksPath
+# (§6.5). The block calls `clc sync --from-hook` fail-safe (never blocks the commit).
+
+CLC_HOOK_BEGIN="# >>> clc managed >>>"
+CLC_HOOK_END="# <<< clc managed <<<"
+CLC_HOOKS="post-commit post-merge post-checkout"
+
+# Resolve the absolute path of the running clc script ONCE. Baked into the hook
+# line (robust in git's minimal-PATH hook environment; hooks are local/.git,
+# never committed).
+_CLC_SELF=""
+clc_self() {
+    if [[ -z "${_CLC_SELF}" ]]; then
+        _CLC_SELF=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")
+    fi
+    echo "${_CLC_SELF}"
+}
+
+# Directory where hooks live for the given main gitdir. Honors core.hooksPath
+# (composes with husky/lefthook); else <main_gitdir>/hooks (§6.5).
+hooks_dir() {
+    local main_gitdir="$1"
+    local hp
+    hp=$(git config -f "${main_gitdir}/config" core.hooksPath 2>/dev/null || true)
+    if [[ -n "${hp}" ]]; then
+        if [[ "${hp}" != /* ]]; then
+            # Relative to the main worktree.
+            hp="$(git_main_worktree "${main_gitdir}")/${hp}"
+        fi
+        echo "${hp}"
+    else
+        echo "${main_gitdir}/hooks"
+    fi
+}
+
+# Install the managed block into each hook (idempotent, non-clobbering).
+install_hooks() {
+    local main_gitdir="$1"
+    local dir self hook file
+    dir=$(hooks_dir "${main_gitdir}")
+    self=$(clc_self)
+    mkdir -p "${dir}"
+    for hook in ${CLC_HOOKS}; do
+        file="${dir}/${hook}"
+        if [[ -f "${file}" ]] && grep -qF "${CLC_HOOK_BEGIN}" "${file}" 2>/dev/null; then
+            continue   # already managed — idempotent
+        fi
+        if [[ ! -f "${file}" ]]; then
+            printf '%s\n' '#!/usr/bin/env bash' > "${file}"
+        fi
+        {
+            printf '%s\n' "${CLC_HOOK_BEGIN}"
+            printf '"%s" sync --from-hook >/dev/null 2>&1 || true\n' "${self}"
+            printf '%s\n' "${CLC_HOOK_END}"
+        } >> "${file}"
+        chmod +x "${file}"
+    done
+}
+
+# Remove the managed block from each hook by its sentinels. Delete the file only
+# if nothing but a shebang and/or blank lines remains (covers the clc-created
+# case; never deletes a file with real user content). Never touches files lacking
+# the sentinel.
+uninstall_hooks() {
+    local main_gitdir="$1"
+    local dir hook file
+    dir=$(hooks_dir "${main_gitdir}")
+    for hook in ${CLC_HOOKS}; do
+        file="${dir}/${hook}"
+        [[ -f "${file}" ]] || continue
+        grep -qF "${CLC_HOOK_BEGIN}" "${file}" 2>/dev/null || continue
+        awk -v b="${CLC_HOOK_BEGIN}" -v e="${CLC_HOOK_END}" '
+            $0 == b { skip = 1; next }
+            $0 == e { skip = 0; next }
+            !skip   { print }
+        ' "${file}" > "${file}.tmp" && mv "${file}.tmp" "${file}"
+        # Delete if only a shebang and/or blank lines remain.
+        if ! grep -qvE '^(#!.*|[[:space:]]*)$' "${file}" 2>/dev/null; then
+            rm -f "${file}"
+        fi
+    done
+}
+
+# Return 0 if the named hook contains the clc sentinel in the given main gitdir.
+hook_installed() {
+    local main_gitdir="$1" hook="$2"
+    local file; file="$(hooks_dir "${main_gitdir}")/${hook}"
+    [[ -f "${file}" ]] && grep -qF "${CLC_HOOK_BEGIN}" "${file}" 2>/dev/null
 }
 
 
@@ -796,21 +900,45 @@ cmd_prune() {
     cmd_status
 }
 
+# Append the two CLC patterns to .git/info/exclude (skip those already present).
+# Echoes each pattern it added (one per line) so callers can report. Pure helper
+# shared by cmd_ignore and cmd_enroll.
+_ignore_patterns() {
+    local main_gitdir="$1"
+    local exclude_file="${main_gitdir}/info/exclude"
+    mkdir -p "${main_gitdir}/info"
+    [[ -f "${exclude_file}" ]] || touch "${exclude_file}"
+    for pat in "${CLC_PAT_MD}" "${CLC_PAT_DIR}"; do
+        if ! grep -qxF "${pat}" "${exclude_file}" 2>/dev/null; then
+            echo "${pat}" >> "${exclude_file}"
+            echo "${pat}"
+        fi
+    done
+}
+
+# Remove the two CLC patterns from .git/info/exclude if present. Echoes each
+# pattern it removed (one per line). Pure helper shared by cmd_unignore/cmd_unenroll.
+_unignore_patterns() {
+    local main_gitdir="$1"
+    local exclude_file="${main_gitdir}/info/exclude"
+    [[ -f "${exclude_file}" ]] || return 0
+    for pat in "${CLC_PAT_MD}" "${CLC_PAT_DIR}"; do
+        if grep -qxF "${pat}" "${exclude_file}" 2>/dev/null; then
+            grep -vxF "${pat}" "${exclude_file}" > "${exclude_file}.tmp" || true
+            mv "${exclude_file}.tmp" "${exclude_file}"
+            echo "${pat}"
+        fi
+    done
+}
+
 cmd_ignore() {
     local main_gitdir
     main_gitdir=$(git_main_gitdir) || die "not inside a Git repository"
 
-    local exclude_file="${main_gitdir}/info/exclude"
-    mkdir -p "${main_gitdir}/info"
-    [[ -f "${exclude_file}" ]] || touch "${exclude_file}"
-
     local -a added=()
-    for pat in "${CLC_PAT_MD}" "${CLC_PAT_DIR}"; do
-        if ! grep -qxF "${pat}" "${exclude_file}" 2>/dev/null; then
-            echo "${pat}" >> "${exclude_file}"
-            added+=("${pat}")
-        fi
-    done
+    while IFS= read -r pat; do
+        [[ -n "${pat}" ]] && added+=("${pat}")
+    done < <(_ignore_patterns "${main_gitdir}")
 
     print_header "Ignored"
     if [[ ${#added[@]} -eq 0 ]]; then
@@ -827,18 +955,10 @@ cmd_unignore() {
     local main_gitdir
     main_gitdir=$(git_main_gitdir) || die "not inside a Git repository"
 
-    local exclude_file="${main_gitdir}/info/exclude"
     local -a removed=()
-
-    if [[ -f "${exclude_file}" ]]; then
-        for pat in "${CLC_PAT_MD}" "${CLC_PAT_DIR}"; do
-            if grep -qxF "${pat}" "${exclude_file}" 2>/dev/null; then
-                grep -vxF "${pat}" "${exclude_file}" > "${exclude_file}.tmp" || true
-                mv "${exclude_file}.tmp" "${exclude_file}"
-                removed+=("${pat}")
-            fi
-        done
-    fi
+    while IFS= read -r pat; do
+        [[ -n "${pat}" ]] && removed+=("${pat}")
+    done < <(_unignore_patterns "${main_gitdir}")
 
     print_header "Unignored"
     if [[ ${#removed[@]} -eq 0 ]]; then
@@ -917,6 +1037,18 @@ cmd_status() {
     current_worktree=$(git_current_worktree) \
                                       || die "unable to determine current worktree"
 
+    # ── Enrollment state (content-derived; absent entirely when not enrolled) ──
+    # A repo is enrolled iff the store exists AND its registry lists this project
+    # by its HOME-relative path. Everything is guarded so an unenrolled repo (no
+    # store) renders NOTHING new, keeping pre-v2 snapshots byte-identical.
+    local is_enrolled=0
+    local rel_id="${main_worktree#${HOME}/}"
+    if [[ "${rel_id}" != "${main_worktree}" && -d "$(clc_store_dir)/.git" ]]; then
+        while IFS=$'\t' read -r path _; do
+            [[ "${path}" == "${rel_id}" ]] && { is_enrolled=1; break; }
+        done < <(registry_read)
+    fi
+
     # ── Claude-file state for current worktree ────────────────────────────────
     local state_tracked=0 state_ignore state_gitignore=0
     claude_files_tracked   "${current_worktree}"     && state_tracked=1
@@ -984,6 +1116,32 @@ cmd_status() {
         printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
             "${max_content_len}" "${main_name}" "${main_branch}" "${main_dirty_suffix}"
         if [[ ${#main_warnings[@]} -gt 0 ]]; then print_warning_line "${main_warnings[@]}"; fi
+    fi
+
+    # Section 1.5: Enrollment (only when enrolled — absent otherwise so unenrolled
+    # snapshots stay byte-identical).
+    if [[ ${is_enrolled} -eq 1 ]]; then
+        echo
+        print_header "Enrollment"
+        echo "  enrolled"
+        local -a hooks_present=() hooks_missing=()
+        local h
+        for h in ${CLC_HOOKS}; do
+            if hook_installed "${main_gitdir}" "${h}"; then
+                hooks_present+=("${h}")
+            else
+                hooks_missing+=("${h}")
+            fi
+        done
+        if [[ ${#hooks_missing[@]} -eq 0 ]]; then
+            printf "  hooks: %s\n" "$(_join ', ' "${hooks_present[@]}")"
+        elif [[ ${#hooks_present[@]} -eq 0 ]]; then
+            printf "  hooks: %s(none installed)%s\n" "${CLR_MUTED}" "${CLR_RESET}"
+        else
+            printf "  hooks: %s %s(missing: %s)%s\n" \
+                "$(_join ', ' "${hooks_present[@]}")" "${CLR_MUTED}" \
+                "$(_join ', ' "${hooks_missing[@]}")" "${CLR_RESET}"
+        fi
     fi
 
     # Section 2: Managed worktrees
@@ -1212,13 +1370,133 @@ cmd_close() {
     fi
 }
 
+# ── v2 enrollment ─────────────────────────────────────────────────────────────
+
+# Under-lock helper: register the project + commit the registry mutation, then
+# do the initial brain sync (its own commit, or noop). Two distinct commits, both
+# under one lock acquisition (§4.7).
+_store_enroll() {
+    local rel="$1" origin="$2" wt="$3"
+    local store; store="$(clc_store_dir)"
+    registry_add "${rel}" "${origin}"
+    git -C "${store}" add -- .clc/registry
+    git -C "${store}" diff --cached --quiet || git -C "${store}" commit -q -m "enroll: ${rel}"
+    store_sync_project "${rel}" "${wt}"
+}
+
+# Under-lock helper: drop the registry entry + commit, then remove the project's
+# store subtree + commit (each only if it actually changed anything).
+_store_unenroll() {
+    local rel="$1"
+    local store; store="$(clc_store_dir)"
+    registry_remove "${rel}"
+    git -C "${store}" add -- .clc/registry
+    git -C "${store}" diff --cached --quiet || git -C "${store}" commit -q -m "unenroll: ${rel}"
+    if git -C "${store}" ls-files -- "${rel}" | grep -q .; then
+        git -C "${store}" rm -r -q -- "${rel}" >/dev/null 2>&1 || true
+        git -C "${store}" diff --cached --quiet || git -C "${store}" commit -q -m "unenroll: ${rel}"
+    fi
+}
+
+# Graduate ignore → full enrollment (§4.7): gitignore + register + hooks + sync.
+cmd_enroll() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
+
+    # Identity = main worktree's HOME-relative path. Error, never guess, if outside $HOME.
+    local rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+    local origin
+    origin=$(git -C "${main_worktree}" config --get remote.origin.url 2>/dev/null || true)
+
+    # 1. Local-gitignore the second brain.
+    _ignore_patterns "${main_gitdir}" >/dev/null
+
+    # 2+4. Register + initial sync (one lock acquisition, two store commits).
+    store_init
+    with_store_lock _store_enroll "${rel}" "${origin}" "${current_worktree}"
+
+    # 3. Install hooks (once, at the main gitdir).
+    install_hooks "${main_gitdir}"
+
+    print_header "Enrolled"
+    echo "  registered"
+    echo "  hooks: $(_join ', ' post-commit post-merge post-checkout)"
+    if [[ "${_STORE_SYNC_RESULT}" == "noop" ]]; then
+        echo "  brain: ${CLR_MUTED}(store already up to date)${CLR_RESET}"
+    else
+        local n; n=$(collect_claude_files_in_dir "${current_worktree}" | grep -c . || true)
+        echo "  brain: ${n} Claude file(s) → store"
+    fi
+    echo
+
+    cmd_status
+}
+
+# Reverse all four enrollment steps (§4.7).
+cmd_unenroll() {
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
+
+    local rel="${main_worktree#${HOME}/}"
+    [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
+
+    # 1. Deregister + drop store subtree (if the store exists at all).
+    if [[ -d "$(clc_store_dir)/.git" ]]; then
+        with_store_lock _store_unenroll "${rel}"
+    fi
+
+    # 2. Remove hooks.
+    uninstall_hooks "${main_gitdir}"
+
+    # 3. Un-ignore the second brain.
+    _unignore_patterns "${main_gitdir}" >/dev/null
+
+    print_header "Unenrolled"
+    echo "  deregistered"
+    echo "  hooks removed"
+    echo "  brain dropped from store"
+    echo
+
+    cmd_status
+}
+
 # ── v2 sync command (hidden/experimental) ─────────────────────────────────────
 
 # Sync the current worktree's second brain into the central git store (§6.1:
 # current-worktree-wins). Hidden/experimental this phase: wired in main()'s
 # dispatch but intentionally absent from usage()/--help.
 cmd_sync() {
+    # --from-hook: run silently + fail-safe (git-hook context must not pollute the
+    # user's commit output). Full main-worktree-identity + peer warning is P5;
+    # --from-hook keeps current-worktree identity for now (non-breaking groundwork).
+    local from_hook=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --from-hook) from_hook=1 ;;
+            -*) die "unknown option for 'sync': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+
     local main_gitdir main_worktree current_worktree
+    if [[ ${from_hook} -eq 1 ]]; then
+        # Fail-safe: any resolution failure exits 0 silently (never break the hook).
+        main_gitdir=$(git_main_gitdir)       || exit 0
+        main_worktree=$(git_main_worktree "${main_gitdir}") || exit 0
+        current_worktree=$(git_current_worktree) || exit 0
+        local rel="${main_worktree#${HOME}/}"
+        [[ "${rel}" != "${main_worktree}" ]] || exit 0
+        store_init >/dev/null 2>&1 || exit 0
+        with_store_lock store_sync_project "${rel}" "${current_worktree}" >/dev/null 2>&1 || true
+        exit 0
+    fi
+
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
     current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
@@ -1260,8 +1538,15 @@ ${CLR_BOLD}Actions (Inspect):${CLR_RESET}
                          files are marked.
 
 ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
+  ${CLR_BOLD}enroll${CLR_RESET}                 Fully manage this repo: gitignore the Claude files,
+                         register it, install sync hooks, and sync the brain
+                         into the central store.
+  ${CLR_BOLD}unenroll${CLR_RESET}               Reverse enroll: deregister, remove hooks, drop the
+                         brain from the store, and un-gitignore the files.
   ${CLR_BOLD}ignore${CLR_RESET}                 Add Claude file patterns to .git/info/exclude
+                         ${CLR_MUTED}(gitignore-only; the standalone step within enroll)${CLR_RESET}
   ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
+                         ${CLR_MUTED}(gitignore-only)${CLR_RESET}
   ${CLR_BOLD}save${CLR_RESET}                   Save Claude files from the current worktree
                          to ~/.clc/saved/
   ${CLR_BOLD}compare${CLR_RESET}                Compare current worktree against the latest saved
@@ -1362,6 +1647,8 @@ main() {
         ls|list)      cmd_ls ;;
         ignore)       cmd_ignore ;;
         unignore)     cmd_unignore ;;
+        enroll)       cmd_enroll ;;
+        unenroll)     cmd_unenroll ;;
         save)         cmd_save ;;
         compare)      cmd_compare ;;
         diff)         cmd_diff ;;
