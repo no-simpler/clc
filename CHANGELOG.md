@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--all` (`-a`) for `save`, `compare`, `diff`, and `restore`: operate across **every** enrolled repo in one pass instead of just the current one. Runnable from anywhere — no current repo required.
+  - `clc save --all` snapshots every enrolled project's second brain into the store in a single call (handy as a checkpoint before risky work).
+  - `clc compare --all` prints a one-line-per-repo audit (in sync / drifted / never synced / missing) and exits non-zero if any repo has drifted.
+  - `clc diff --all` shows the full Git diff for every drifted repo.
+  - `clc restore --all` reconciles every repo's worktree from the store, prompting per repo before any data loss.
+  - Repos that aren't present on this machine are reported `missing` and skipped (never purged from the store).
+
 ## [2.0.2] - 2026-06-07
 
 ### Changed

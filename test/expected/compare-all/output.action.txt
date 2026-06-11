@@ -1,0 +1,7 @@
+Compare (all enrolled)
+  %%PARENT_DIR_HOME%%/.repos/clean   in sync
+  %%PARENT_DIR_HOME%%/.repos/drift   drifted (1)
+  %%PARENT_DIR_HOME%%/.repos/gone    missing
+  %%PARENT_DIR_HOME%%/.repos/nosync  never synced
+
+exit: 1

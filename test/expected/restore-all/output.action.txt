@@ -1,0 +1,14 @@
+Restore (all enrolled)
+  %%PARENT_DIR_HOME%%/.repos/clean  in sync
+
+%%PARENT_DIR_HOME%%/.repos/drift
+Compare
+  Exists in storage only:
+    + .claude/settings.json
+  Different content:
+    ~ CLAUDE.md
+  Exists in worktree only:
+    - docs/CLAUDE.md
+
+Synchronize? (Data loss possible!) [y/N] 
+Synchronized.

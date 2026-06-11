@@ -1,0 +1,12 @@
+Synced (all enrolled)
+  %%PARENT_DIR_HOME%%/.repos/gone  missing
+  %%PARENT_DIR_HOME%%/.repos/one   synced
+  %%PARENT_DIR_HOME%%/.repos/two   up to date
+
+store tracked files:
+gone/.claude/settings.json
+gone/CLAUDE.md
+one/.claude/settings.json
+one/CLAUDE.md
+two/.claude/settings.json
+two/CLAUDE.md

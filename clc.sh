@@ -244,6 +244,38 @@ store_sync_project() {
     _STORE_SYNC_RESULT="synced"; return 0
 }
 
+# Batch engine for `clc save --all`: sync every enrolled repo's main worktree brain
+# into the store in one pass. MUST be called under with_store_lock. Iterates the
+# (sorted) registry — order is deterministic. A repo absent on this machine is
+# reported "missing" and skipped (not an error). Populates result globals rather
+# than printing, mirroring store_sync_project's _STORE_SYNC_RESULT contract:
+#   _SYNC_ALL_ROWS    — TAB-separated "<rel>\t<status>" lines (status may be colored)
+#   _SYNC_ALL_SYNCED  — 1 if any repo actually changed (→ caller triggers one backup)
+#   _SYNC_ALL_ANY     — 1 if the registry had at least one entry
+_SYNC_ALL_ROWS=()
+_SYNC_ALL_SYNCED=0
+_SYNC_ALL_ANY=0
+store_sync_all() {
+    _SYNC_ALL_ROWS=(); _SYNC_ALL_SYNCED=0; _SYNC_ALL_ANY=0
+    local rel localpath
+    while IFS=$'\t' read -r rel _ _; do
+        [[ -n "${rel}" ]] || continue
+        _SYNC_ALL_ANY=1
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            _SYNC_ALL_ROWS+=("${rel}"$'\t'"${CLR_MUTED}missing${CLR_RESET}")
+            continue
+        fi
+        store_sync_project "${rel}" "${localpath}"
+        if [[ "${_STORE_SYNC_RESULT}" == "synced" ]]; then
+            _SYNC_ALL_ROWS+=("${rel}"$'\t'"synced")
+            _SYNC_ALL_SYNCED=1
+        else
+            _SYNC_ALL_ROWS+=("${rel}"$'\t'"${CLR_MUTED}up to date${CLR_RESET}")
+        fi
+    done < <(registry_read)
+}
+
 
 # ── v2 hooks ──────────────────────────────────────────────────────────────────
 #
@@ -675,9 +707,156 @@ _print_compare_output() {
     fi
 }
 
+# Print buffered "<rel>TAB<status>" rows as an aligned two-column list. Column width
+# is derived from the (color-free) rel paths; status text may carry color codes.
+# Used by the --all variants of save/compare for their per-repo summary.
+_print_repo_rows() {
+    local maxw=0 row rel
+    for row in "$@"; do
+        rel="${row%%$'\t'*}"
+        [[ ${#rel} -gt ${maxw} ]] && maxw=${#rel}
+    done
+    for row in "$@"; do
+        rel="${row%%$'\t'*}"
+        printf "  %-*s  %s\n" "${maxw}" "${rel}" "${row#*$'\t'}"
+    done
+}
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+# Audit every enrolled repo's brain against the store (clc compare --all). Read-only,
+# no lock, runnable from anywhere. One line per repo: in sync / drifted (N) /
+# never synced / missing. Returns 1 if any present repo has drifted, else 0.
+cmd_compare_all() {
+    local -a rows=()
+    local any=0 drift_any=0 rel localpath save_dir diffs
+    while IFS=$'\t' read -r rel _ _; do
+        [[ -n "${rel}" ]] || continue
+        any=1
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            rows+=("${rel}"$'\t'"${CLR_MUTED}missing${CLR_RESET}")
+            continue
+        fi
+        if ! save_dir=$(store_mirror_dir "${localpath}" 2>/dev/null); then
+            rows+=("${rel}"$'\t'"${CLR_MUTED}never synced${CLR_RESET}")
+            continue
+        fi
+        _compare_claude_files "${localpath}" "${save_dir}"
+        diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+        if [[ ${diffs} -eq 0 ]]; then
+            rows+=("${rel}"$'\t'"in sync")
+        else
+            rows+=("${rel}"$'\t'"${CLR_WARN}drifted (${diffs})${CLR_RESET}")
+            drift_any=1
+        fi
+    done < <(registry_read)
+
+    print_header "Compare (all enrolled)"
+    if [[ ${any} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
+        return 0
+    fi
+    _print_repo_rows "${rows[@]}"
+    return $(( drift_any ))
+}
+
+# Full git diff across every enrolled repo (clc diff --all). Per drifted repo, print
+# a header then the storage→worktree deltas; in-sync/missing/never-synced repos get a
+# one-line status. Returns 1 if any present repo has drifted, else 0.
+cmd_diff_all() {
+    local any=0 drift_any=0 rel localpath save_dir diffs f
+    local -a git_color=()
+    [[ "${OPT_NO_COLOR}" -eq 1 ]] && git_color=("--no-color")
+    print_header "Diff (all enrolled)"
+    while IFS=$'\t' read -r rel _ _; do
+        [[ -n "${rel}" ]] || continue
+        any=1
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            printf "  %s  %smissing%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            continue
+        fi
+        if ! save_dir=$(store_mirror_dir "${localpath}" 2>/dev/null); then
+            printf "  %s  %snever synced%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            continue
+        fi
+        _compare_claude_files "${localpath}" "${save_dir}"
+        diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+        if [[ ${diffs} -eq 0 ]]; then
+            printf "  %s  %sin sync%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            continue
+        fi
+        drift_any=1
+        printf "\n%s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
+        for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
+            git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" /dev/null || true
+        done
+        for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
+            git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" "${localpath}/${f}" || true
+        done
+        for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
+            git diff --no-index ${git_color[@]+"${git_color[@]}"} -- /dev/null "${localpath}/${f}" || true
+        done
+    done < <(registry_read)
+
+    if [[ ${any} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
+        return 0
+    fi
+    return $(( drift_any ))
+}
+
+# Reconcile every enrolled repo's worktree from the store (clc restore --all). Per
+# drifted repo, delegates to _apply_restore (which keeps its per-repo data-loss
+# prompt); in-sync/missing/never-synced repos get a one-line status and are skipped.
+cmd_restore_all() {
+    local any=0 rel localpath save_dir diffs line
+    print_header "Restore (all enrolled)"
+    # Buffer the registry first: iterating via `while read < <(registry_read)` would
+    # redirect the loop body's stdin to the process substitution, starving
+    # _apply_restore's interactive [y/N] prompt. A plain for-loop keeps real stdin.
+    local -a entries=()
+    while IFS= read -r line; do entries+=("${line}"); done < <(registry_read)
+    for line in ${entries[@]+"${entries[@]}"}; do
+        rel="${line%%$'\t'*}"
+        [[ -n "${rel}" ]] || continue
+        any=1
+        localpath="${HOME}/${rel}"
+        if dir_is_empty "${localpath}"; then
+            printf "  %s  %smissing%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            continue
+        fi
+        if ! save_dir=$(store_mirror_dir "${localpath}" 2>/dev/null); then
+            printf "  %s  %snever synced%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            continue
+        fi
+        _compare_claude_files "${localpath}" "${save_dir}"
+        diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+        if [[ ${diffs} -eq 0 ]]; then
+            printf "  %s  %sin sync%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
+            continue
+        fi
+        printf "\n%s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
+        _apply_restore "${localpath}" "${save_dir}" || true
+    done
+
+    [[ ${any} -eq 0 ]] && echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
+    return 0
+}
+
 cmd_compare() {
+    local opt_all=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a|--all) opt_all=1 ;;
+            -*) die "unknown option for 'compare': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    [[ ${opt_all} -eq 1 ]] && { cmd_compare_all; return; }
+
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
@@ -705,6 +884,17 @@ cmd_compare() {
 }
 
 cmd_diff() {
+    local opt_all=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a|--all) opt_all=1 ;;
+            -*) die "unknown option for 'diff': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    [[ ${opt_all} -eq 1 ]] && { cmd_diff_all; return; }
+
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
@@ -745,6 +935,17 @@ cmd_diff() {
 }
 
 cmd_restore() {
+    local opt_all=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a|--all) opt_all=1 ;;
+            -*) die "unknown option for 'restore': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+    [[ ${opt_all} -eq 1 ]] && { cmd_restore_all; return; }
+
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
@@ -1834,18 +2035,38 @@ warn_peer_source() {
 # Sync the current worktree's second brain into the central git store (§6.1:
 # current-worktree-wins). Hidden/experimental this phase: wired in main()'s
 # dispatch but intentionally absent from usage()/--help.
+# Snapshot every enrolled repo's brain into the store in one pass (clc save --all).
+# Runnable from anywhere (no current repo required). Holds ONE store lock for the
+# whole batch and triggers at most one debounced backup at the end.
+cmd_sync_all() {
+    store_init
+    with_store_lock store_sync_all
+
+    print_header "Synced (all enrolled)"
+    if [[ ${_SYNC_ALL_ANY} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
+        return 0
+    fi
+    _print_repo_rows ${_SYNC_ALL_ROWS[@]+"${_SYNC_ALL_ROWS[@]}"}
+    [[ ${_SYNC_ALL_SYNCED} -eq 1 ]] && maybe_trigger_backup
+    return 0
+}
+
 cmd_sync() {
     # --from-hook: run silently + fail-safe (git-hook context must not pollute the
     # user's commit output). The peer warning still goes to stderr (§6.1).
-    local from_hook=0
+    local from_hook=0 opt_all=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from-hook) from_hook=1 ;;
+            -a|--all)    opt_all=1 ;;
             -*) die "unknown option for 'sync': $1" ;;
             *)  die "unexpected argument: $1" ;;
         esac
         shift
     done
+    [[ ${from_hook} -eq 1 && ${opt_all} -eq 1 ]] && die "--from-hook and --all are mutually exclusive"
+    [[ ${opt_all} -eq 1 ]] && { cmd_sync_all; return; }
 
     local main_gitdir main_worktree current_worktree
     if [[ ${from_hook} -eq 1 ]]; then
@@ -2211,14 +2432,18 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          ${CLR_MUTED}(gitignore-only; the standalone step within enroll)${CLR_RESET}
   ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
                          ${CLR_MUTED}(gitignore-only)${CLR_RESET}
-  ${CLR_BOLD}save${CLR_RESET}                   Sync Claude files from the current worktree
-                         into the central store.
-  ${CLR_BOLD}compare${CLR_RESET}                Compare current worktree against the stored
-                         state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
-  ${CLR_BOLD}diff${CLR_RESET}                   Like compare, but prints a full Git diff for all
-                         mismatches. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.${CLR_RESET}
-  ${CLR_BOLD}restore${CLR_RESET}                Restore Claude files from the stored state
+  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}          Sync Claude files from the current worktree
+                         into the central store. ${CLR_MUTED}With --all, snapshot every
+                         enrolled repo (runnable from anywhere).${CLR_RESET}
+  ${CLR_BOLD}compare${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Compare current worktree against the stored
+                         state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.
+                         With --all, audit every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}diff${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}          Like compare, but prints a full Git diff for all
+                         mismatches. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.
+                         With --all, diff every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}restore${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Restore Claude files from the stored state
                          to the current worktree. Prompts before making changes.
+                         ${CLR_MUTED}With --all, reconcile every enrolled repo.${CLR_RESET}
   ${CLR_BOLD}backup${CLR_RESET}                 Force an immediate push of the central store to all
                          configured backup targets ${CLR_MUTED}(remote and/or bundle)${CLR_RESET}.
 
@@ -2272,6 +2497,8 @@ ${CLR_BOLD}Flags:${CLR_RESET}
   ${CLR_BOLD}-n, --no-claude${CLR_RESET}    ${CLR_MUTED}(new)${CLR_RESET} Skip restoring Claude files from saved state.
   ${CLR_BOLD}-c, --commit${CLR_RESET}       ${CLR_MUTED}(pull, close)${CLR_RESET} Commit immediately after staging
                      (opens editor with pre-populated message).
+  ${CLR_BOLD}-a, --all${CLR_RESET}          ${CLR_MUTED}(save, compare, diff, restore)${CLR_RESET} Operate across every
+                     enrolled repo instead of the current one. Runnable anywhere.
 
 ${CLR_MUTED}Claude files: CLAUDE.md (any depth), .claude/ (worktree root only).
 Managed worktrees: main worktree or peer at <parent>/<main-name>-<worktree-name>.
@@ -2333,9 +2560,9 @@ main() {
         enroll)       cmd_enroll ;;
         unenroll)     cmd_unenroll ;;
         save)         cmd_sync ${cmd_args[@]+"${cmd_args[@]}"} ;;
-        compare)      cmd_compare ;;
-        diff)         cmd_diff ;;
-        restore)      cmd_restore ;;
+        compare)      cmd_compare ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        diff)         cmd_diff ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        restore)      cmd_restore ${cmd_args[@]+"${cmd_args[@]}"} ;;
         new|add)      cmd_new ${cmd_args[@]+"${cmd_args[@]}"} ;;
         rm|remove)    cmd_rm ${cmd_args[@]+"${cmd_args[@]}"} ;;
         prune|clean)  cmd_prune ${cmd_args[@]+"${cmd_args[@]}"} ;;
