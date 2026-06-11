@@ -1,6 +1,8 @@
 # Publish clc
 
-Guide through a complete clc release. Follow each step in order, verifying before proceeding.
+Run a complete clc release. Execute each step in order, verifying before proceeding to the next.
+
+**This flow is entirely agent-runnable.** Every step — including the commit, push, GitHub release, and Homebrew tap update — can be run directly by the agent. Authentication (commit signing, `git push`, the tap push) is gated by TouchID, so the only thing required of the user is to be at the desk to confirm the TouchID prompts as they appear. Do not hand the user copy-paste blocks; run the commands yourself and let TouchID handle authorization.
 
 ## Steps
 
@@ -68,22 +70,16 @@ gh release create vX.Y.Z clc.sh install.sh \
 
 ### 8. Update Homebrew tap
 
-Compute the SHA256 of the release tarball and generate a self-contained shell script for the user to copy-paste and run:
+Compute the SHA256 of the release tarball, then run the tap update directly (the tap push is TouchID-gated — confirm the prompt when it appears). Substitute `X.Y.Z` and `$SHA` before running:
 
 ```bash
 SHA=$(curl -sL https://github.com/no-simpler/clc/archive/refs/tags/vX.Y.Z.tar.gz \
   | shasum -a 256 | cut -d' ' -f1)
-```
 
-Then output the following block with `X.Y.Z` and `$SHA` substituted:
-
-```
-Run this to update the Homebrew tap:
-
-  TAPDIR=$(mktemp -d) \
+TAPDIR=$(mktemp -d) \
   && git clone git@github.com:no-simpler/homebrew-tap.git "$TAPDIR" \
   && sed -i '' 's|refs/tags/v[0-9.]*\.tar\.gz|refs/tags/vX.Y.Z.tar.gz|' "$TAPDIR/Formula/clc.rb" \
-  && sed -i '' 's/sha256 ".*"/sha256 "<SHA256>"/' "$TAPDIR/Formula/clc.rb" \
+  && sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" "$TAPDIR/Formula/clc.rb" \
   && git -C "$TAPDIR" add Formula/clc.rb \
   && git -C "$TAPDIR" commit -m "Update clc to vX.Y.Z" \
   && git -C "$TAPDIR" push \
