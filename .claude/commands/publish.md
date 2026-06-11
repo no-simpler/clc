@@ -39,11 +39,11 @@ CLC_VERSION="X.Y.Z"
 
 ### 4. Commit
 
-Stage and commit the version bump:
+Stage and commit the version bump (signing is TouchID-gated — confirm the prompt):
 
 ```bash
 git add clc.sh CHANGELOG.md
-git -c commit.gpgsign=false commit -m "Release vX.Y.Z"
+git commit -m "Release vX.Y.Z"
 ```
 
 ### 5. Tag
