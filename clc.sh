@@ -197,22 +197,23 @@ store_sync_project() {
     Ftmp=$(mktemp)
     collect_claude_files_in_dir "${wt}" > "${Ftmp}"   # brain files, relative to wt
 
-    # Submodule subtrees (relative to wt) are nested projects with their own store
-    # subtree under "${rel}/<submodule>". The brain collection prunes them, so they
-    # never appear in Ftmp — orphan-removal below must skip them too, or syncing the
-    # parent would clobber a submodule's separately-synced brain.
+    # Nested git boundary subtrees (relative to wt) — submodules and linked
+    # worktrees (e.g. .claude/worktrees/<name>) — are nested projects with their own
+    # store subtree under "${rel}/<boundary>". The brain collection prunes them, so
+    # they never appear in Ftmp — orphan-removal below must skip them too, or syncing
+    # the parent would clobber a boundary's separately-synced brain.
     local subtmp; subtmp=$(mktemp)
-    git -C "${wt}" submodule status --recursive 2>/dev/null | awk '{print $2}' > "${subtmp}"
+    _nested_git_boundaries "${wt}" > "${subtmp}"
 
     # Drop orphans: tracked files under rel that are no longer in the brain
-    # (excluding files that belong to a nested submodule subtree).
+    # (excluding files that belong to a nested boundary subtree).
     while IFS= read -r -d '' t; do
-        local t_rel="${t#${rel}/}" sm in_submodule=0
-        while IFS= read -r sm; do
-            [[ -n "${sm}" ]] || continue
-            if [[ "${t_rel}" == "${sm}/"* ]]; then in_submodule=1; break; fi
+        local t_rel="${t#${rel}/}" b in_boundary=0
+        while IFS= read -r b; do
+            [[ -n "${b}" ]] || continue
+            if [[ "${t_rel}" == "${b}/"* ]]; then in_boundary=1; break; fi
         done < "${subtmp}"
-        [[ ${in_submodule} -eq 1 ]] && continue
+        [[ ${in_boundary} -eq 1 ]] && continue
         if ! grep -qxF "${t_rel}" "${Ftmp}"; then
             git -C "${store}" rm -q -- "${t}" >/dev/null 2>&1 || true
         fi
@@ -554,8 +555,11 @@ collect_claude_files_in_dir() {
     local base="$1"
     local -a results=()
     if [[ -d "${base}/.claude" ]]; then
+        # Prune nested git boundaries (e.g. Claude Code's .claude/worktrees/<name>,
+        # a linked worktree): their files belong to a separate project, not this brain.
         while IFS= read -r f; do results+=("${f#${base}/}"); done \
-            < <(find "${base}/.claude" -type f 2>/dev/null | sort)
+            < <(find "${base}/.claude" -type d -exec test -e '{}/.git' ';' -prune -o \
+                    -type f -print 2>/dev/null | sort)
     fi
     while IFS= read -r f; do results+=("${f#${base}/}"); done \
         < <(_find_claude_md_files "${base}")
@@ -586,14 +590,33 @@ _brain_ignored_paths() {
     rm -rf "${gd}"
 }
 
-# Find CLAUDE.md files in a directory, excluding .git internals and submodule directories.
-# Uses -prune so find never descends into excluded dirs (faster in repos with large submodules).
+# Print paths (relative to base) of nested git boundaries: top-level subdirectories
+# that hold a .git entry — a submodule or linked worktree (.git file, e.g. Claude
+# Code's .claude/worktrees/<name>) or a nested clone (.git dir). Their contents
+# belong to a separate project, never the outer brain, so callers prune them. find
+# does not descend past a boundary, so only the outermost ones are returned.
+# Filesystem-based (not `git worktree list`) so it is symlink-proof: the target
+# repo reports a realpath that need not match this symlinked call-site path.
+# BSD/macOS-compatible (no GNU -printf).
+_nested_git_boundaries() {
+    local base="$1" d
+    while IFS= read -r d; do printf '%s\n' "${d#${base}/}"; done \
+        < <(find "${base}" -mindepth 1 \
+                \( -name .git -prune \) -o \
+                \( -type d -exec test -e '{}/.git' ';' -prune -print \) 2>/dev/null) \
+        | sort -u
+}
+
+# Find CLAUDE.md files in a directory, excluding .git internals and nested git
+# boundaries (submodules, linked worktrees, nested clones). Uses -prune so find
+# never descends into excluded dirs (faster, and keeps a sibling project's files
+# out of this brain).
 _find_claude_md_files() {
     local base="$1"
     local -a prune=(-name ".git")
-    while IFS= read -r sm_path; do
-        [[ -n "${sm_path}" ]] && prune+=(-o -path "${base}/${sm_path}")
-    done < <(git -C "${base}" submodule status --recursive 2>/dev/null | awk '{print $2}')
+    while IFS= read -r b_path; do
+        [[ -n "${b_path}" ]] && prune+=(-o -path "${base}/${b_path}")
+    done < <(_nested_git_boundaries "${base}")
     find "${base}" \( "${prune[@]}" \) -prune -o \
         -name "CLAUDE.md" -type f -print 2>/dev/null | sort
 }
@@ -632,17 +655,18 @@ _compare_claude_files() {
     collect_claude_files_in_dir "${wt}"       > "$tmp_wt"
     collect_claude_files_in_dir "${save_dir}" > "$tmp_storage"
 
-    # The worktree collection prunes nested submodule subtrees (they are separate
-    # projects with their own store subtree). Prune the same paths from the storage
-    # side so a parent's mirror — which physically nests the submodule's synced
-    # files — compares symmetrically. No-op for repos without
-    # submodules and for the submodule's own (un-nested) subtree.
-    local sm
-    while IFS= read -r sm; do
-        [[ -n "${sm}" ]] || continue
-        grep -v "^${sm}/" "$tmp_storage" > "${tmp_storage}.f" 2>/dev/null || true
+    # The worktree collection prunes nested git boundaries — submodules and linked
+    # worktrees (e.g. .claude/worktrees/<name>) — which are separate projects with
+    # their own store subtree. Prune the same paths from the storage side so a
+    # parent's mirror — which physically nests those projects' synced files —
+    # compares symmetrically. No-op for repos without nested boundaries and for a
+    # boundary's own (un-nested) subtree.
+    local b
+    while IFS= read -r b; do
+        [[ -n "${b}" ]] || continue
+        grep -v "^${b}/" "$tmp_storage" > "${tmp_storage}.f" 2>/dev/null || true
         mv "${tmp_storage}.f" "$tmp_storage"
-    done < <(git -C "${wt}" submodule status --recursive 2>/dev/null | awk '{print $2}')
+    done < <(_nested_git_boundaries "${wt}")
 
     while IFS= read -r f; do _CMP_ONLY_STORAGE+=("$f"); done  < <(comm -23 "$tmp_storage" "$tmp_wt")
     while IFS= read -r f; do _CMP_ONLY_WORKTREE+=("$f"); done < <(comm -13 "$tmp_storage" "$tmp_wt")

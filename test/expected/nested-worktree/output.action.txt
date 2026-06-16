@@ -1,0 +1,10 @@
+=== ls from parent ===
+Claude files
+    .claude/  (properly ignored)
+    CLAUDE.md  (properly ignored)
+
+(no saved state — run 'clc save')
+
+=== save from parent ===
+Synced
+  3 Claude file(s) → store
