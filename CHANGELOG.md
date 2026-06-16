@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-06-16
+
+A bug-fix release closing a data-loss regression in v3's worktree flow, plus a more robust model for reconciling the second brain across worktrees. Your store, enrollment, and backups are unchanged. **Upgrade promptly** — the installed `clc` is what your git hooks call, so the fix only takes effect once the binary on your `PATH` is 3.0.1.
+
+### Fixed
+- **`clc go` no longer wipes your stored second brain when creating a worktree.** Creating a managed worktree runs `git worktree add`, which fires clc's `post-checkout` hook *inside the brand-new, still-empty worktree*. The hook's auto-sync read the brain from that empty worktree and deleted the project's entire stored brain as "orphans" — so the new worktree (and every future one) came up blank. The hook now always syncs from the **main** worktree, and a safety guard refuses to erase a populated store from an empty source. If your store was already wiped, your on-disk brain is intact: run `clc save` from the main worktree to restore it.
+- **Stale nested-worktree gitlinks are swept from the store.** A removed worktree could leave a `160000` gitlink behind in the parent's store subtree (plain `git rm` exits non-zero on it and the error was swallowed); the orphan-removal now force-removes it, and the leak vector (`git add -A`) is gone.
+
+### Added
+- **`clc save --force-empty`** — the explicit escape hatch to erase a project's stored brain when the worktree brain is genuinely empty (the new guard otherwise refuses). Never available to the git hook.
+- **`clc reconcile`** — a read-only 3-way view of the brain across the current worktree, the store (canonical), and the main worktree, so you can see divergence and choose to promote (`clc save`) or take (`clc restore`) deliberately.
+
+### Changed
+- **The second brain is reconciled around the main worktree as canonical.** A commit in a peer worktree no longer silently overwrites the store with that worktree's brain (the old "current-worktree-wins"); it keeps the store mirroring main and prints a one-line nudge when the peer's brain has diverged, so you promote edits deliberately with `clc save`.
+
 ## [3.0.0] - 2026-06-16
 
 This is a **breaking release** that reimagines clc's worktree workflow around a single low-friction verb. Your second brain (store, enrollment, save/restore/compare, hooks, backups) is unchanged and migrates without action.
@@ -197,7 +212,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/no-simpler/clc/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/no-simpler/clc/compare/v2.1.2...v3.0.0
 [2.1.2]: https://github.com/no-simpler/clc/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/no-simpler/clc/compare/v2.1.0...v2.1.1

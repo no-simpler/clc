@@ -9,11 +9,13 @@
 # Asserts (all state-based — never snapshots raw git-commit stdout/SHAs):
 #   1. Main-worktree auto-sync: editing CLAUDE.md + committing in main fires the
 #      hook; the store mirror then holds the edited content.
-#   2. Peer-worktree auto-sync: editing the brain + committing in the peer fires
-#      the hook; it emits the peer-source warning (stderr) and the store mirror
-#      reflects the PEER's brain (current-worktree-wins, §6.1).
-#   3. No-op: committing a non-brain change in main leaves the store unchanged
-#      (no spurious store commit).
+#   2. Canonical-main policy: editing the brain + committing in a PEER fires the
+#      hook, but the store keeps mirroring MAIN (a peer can never clobber the
+#      canonical brain). The peer's divergence is surfaced as a stderr nudge.
+#   3. No-op: a non-brain commit in the peer fires the hook but yields no store
+#      commit (main's brain is unchanged).
+#   4. Deliberate promotion: `clc save` from the peer is the explicit
+#      worktree→store path; the store then reflects the peer's brain.
 
 set -euo pipefail
 
@@ -61,7 +63,7 @@ ${GIT} commit -q -am "tracked change in main"
 echo "1. main auto-sync — store CLAUDE.md after main commit:"
 git -C "${STORE}" show "HEAD:${PREFIX}/CLAUDE.md"
 
-# ── 2. Peer-worktree auto-sync + warning. ──
+# ── 2. Canonical-main policy + peer-divergence nudge. ──
 # Create a managed peer at the nested convention path via clc go (new branch →
 # -y skips the confirm prompt; --no-launch skips the binary launch).
 (cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color go feat -y --no-launch) > /dev/null 2>&1
@@ -70,23 +72,22 @@ PEER="${CASE_DIR}/main/.claude/worktrees/feat"
 cd "${PEER}"
 echo "# edited in peer" > CLAUDE.md
 echo "peer change 1" >> README.md
-# Capture the commit's stderr; the hook's peer warning surfaces there.
+# Capture the commit's stderr; the hook's peer-divergence nudge surfaces there.
 ${GIT} commit -q -am "tracked change in peer" 2>"${CASE_DIR}/peer-commit.stderr" || true
 
 echo
-echo "2. peer auto-sync — warning line on commit stderr:"
-grep -F "synced brain from peer worktree" "${CASE_DIR}/peer-commit.stderr" || echo "(no warning found)"
-echo "   store CLAUDE.md after peer commit:"
+echo "2. peer commit — divergence nudge on commit stderr:"
+grep -F "brain differs from the store" "${CASE_DIR}/peer-commit.stderr" >/dev/null \
+    && echo "   nudge emitted" || echo "   (no nudge found)"
+echo "   store CLAUDE.md after peer commit (still canonical = main):"
 git -C "${STORE}" show "HEAD:${PREFIX}/CLAUDE.md"
 
-# ── 3. No-op: a non-brain commit must not create a store commit. ──
-# The peer's brain now matches the store (it was just synced in step 2), so a
-# further non-brain commit there fires the hook but yields a store no-op.
+# ── 3. No-op: a non-brain commit in the peer must not create a store commit. ──
+# The hook syncs MAIN (unchanged since step 1), so the store is a no-op regardless
+# of the peer's diverging brain.
 STORE_HEAD_BEFORE="$(git -C "${STORE}" rev-list --count HEAD)"
 cd "${PEER}"
 echo "peer change 2 (non-brain)" >> README.md
-# Redirect stderr (the peer warning still fires — a peer commit always warns;
-# the no-op assertion below is about store *content*, not the warning).
 ${GIT} commit -q -am "non-brain change in peer" 2>/dev/null
 STORE_HEAD_AFTER="$(git -C "${STORE}" rev-list --count HEAD)"
 
@@ -97,3 +98,11 @@ if [[ "${STORE_HEAD_BEFORE}" == "${STORE_HEAD_AFTER}" ]]; then
 else
     echo "   store CHANGED: ${STORE_HEAD_BEFORE} -> ${STORE_HEAD_AFTER}"
 fi
+
+# ── 4. Deliberate promotion: `clc save` from the peer pushes ITS brain. ──
+cd "${PEER}"
+(cd "${PEER}" && "$BASH" "${CLC}" --no-color save) > /dev/null 2>&1
+
+echo
+echo "4. deliberate promotion — store CLAUDE.md after 'clc save' in peer:"
+git -C "${STORE}" show "HEAD:${PREFIX}/CLAUDE.md"

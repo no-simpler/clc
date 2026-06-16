@@ -1,0 +1,8 @@
+1. store subtree BEFORE cleanup (carries the stale gitlink):
+<project>/.claude/settings.json
+<project>/.claude/worktrees/ghost
+<project>/CLAUDE.md
+
+2. store subtree AFTER save (gitlink gone, brain intact):
+<project>/.claude/settings.json
+<project>/CLAUDE.md

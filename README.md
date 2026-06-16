@@ -77,10 +77,11 @@ clc save                       # sync current worktree's brain into the store
 clc compare                    # in sync with the store? (exit 0 = yes)
 clc diff                       # full git diff of any mismatch
 clc restore                    # pull the stored brain into this worktree (prompts)
+clc reconcile                  # read-only 3-way view: worktree vs store vs main
 
 # Worktrees — create a peer, work, transplant back, clean up
-clc new my-feature             # peer worktree + branch "my-feature", brain restored
-clc new feature/CC-123-name    # worktree "name", branch "feature/CC-123-name"
+clc go my-feature              # create-or-resume worktree + branch, brain seeded, launch claude
+clc go feature/CC-123-name     # worktree "name", branch "feature/CC-123-name"
 clc pull my-feature            # stage a peer's changes onto the current branch
 clc pull -c my-feature         # stage and commit
 clc close my-feature           # pull, then remove the worktree + branch
@@ -149,10 +150,11 @@ clc migrate                    # discover clc-touched repos from the legacy stor
 | `clc unenroll` | Reverse enroll: deregister, remove hooks, drop the brain from the store, un-ignore |
 | `clc ignore`   | Add Claude file patterns to `.git/info/exclude` (gitignore-only step)            |
 | `clc unignore` | Remove Claude file patterns from `.git/info/exclude`                             |
-| `clc save`     | Sync the current worktree's brain into the central store (alias for `sync`)      |
+| `clc save`     | Sync the current worktree's brain into the central store (alias for `sync`). `--force-empty` allows erasing the store from an empty brain |
 | `clc compare`  | Compare current worktree against the stored state (exit 0 = in sync)             |
 | `clc diff`     | Like compare, but prints a full git diff for all mismatches                      |
 | `clc restore`  | Restore Claude files from the stored state. Prompts before changes.              |
+| `clc reconcile`| Read-only 3-way view of the brain across the current worktree, store, and main   |
 | `clc backup`   | Force an immediate push of the store to all configured backup targets            |
 
 ### Worktrees
@@ -224,7 +226,7 @@ Sync is **copy-based** (the brain stays as real, locally-gitignored files in you
 
 `clc enroll` installs `post-commit`, `post-merge`, and `post-checkout` hooks (once, at the main `.git`; composes with existing hooks / `core.hooksPath` via a sentinel-marked block, never clobbering your content). Each calls `clc sync --from-hook` fail-safe — it never blocks or fails your commit.
 
-Cadence is **best-effort**: synced on commit, merge, and checkout. `git rebase` does **not** fire these for replayed commits — if the brain changed mid-rebase, run `clc sync` (or `clc save`) manually. A commit in any worktree syncs *that worktree's* brain (current-worktree-wins); a warning is printed when synced from a peer.
+Cadence is **best-effort**: synced on commit, merge, and checkout. `git rebase` does **not** fire these for replayed commits — if the brain changed mid-rebase, run `clc sync` (or `clc save`) manually. The store mirrors the **main worktree** (canonical), regardless of which worktree fired the hook — so a commit in a feature worktree can never clobber or wipe the stored brain. A guard also refuses to erase a populated store from an empty worktree brain (override with `clc save --force-empty`). When a peer worktree's brain has diverged, the hook prints a one-line nudge; promote those edits deliberately with `clc save` (or pull the stored brain with `clc restore`), and use `clc reconcile` to see the 3-way delta.
 
 ### Backups
 

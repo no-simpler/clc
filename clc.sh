@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="3.0.0"
+CLC_VERSION="3.0.1"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
@@ -193,12 +193,14 @@ registry_remove() {
 }
 
 # Re-materialize a project's second brain into the store subtree and commit it
-# (§4.2 executable spec, VERBATIM). Subtree-scoped + delete-aware. MUST be called
-# under with_store_lock. rel = HOME-relative project path (store mirror subdir);
-# wt = source worktree. Sets _STORE_SYNC_RESULT to "synced" or "noop".
-_STORE_SYNC_RESULT=""   # "synced" | "noop"
+# (§4.2 executable spec). Subtree-scoped + delete-aware. MUST be called under
+# with_store_lock. rel = HOME-relative project path (store mirror subdir);
+# wt = source worktree; force_empty (default 0) permits erasing a populated store
+# subtree when the source brain is empty (the explicit, human-gated escape hatch).
+# Sets _STORE_SYNC_RESULT to "synced", "noop", or "guarded".
+_STORE_SYNC_RESULT=""   # "synced" | "noop" | "guarded"
 store_sync_project() {
-    local rel="$1" wt="$2"
+    local rel="$1" wt="$2" force_empty="${3:-0}"
     local store S Ftmp
     store="$(clc_store_dir)"
     S="${store}/${rel}"
@@ -215,8 +217,35 @@ store_sync_project() {
     local subtmp; subtmp=$(mktemp)
     _nested_git_boundaries "${wt}" > "${subtmp}"
 
+    # Wipe guard: refuse to delete a populated store subtree when the source brain
+    # is entirely empty, unless explicitly forced. This is the safety net against a
+    # hook firing inside a brand-new, brain-less worktree (e.g. `git worktree add`'s
+    # post-checkout) and orphan-removing the canonical brain. "Populated" ignores
+    # nested-boundary entries, which belong to other projects.
+    if [[ ${force_empty} -eq 0 ]] && ! grep -q . "${Ftmp}"; then
+        local has_brain=0 t t_rel b in_boundary
+        while IFS= read -r -d '' t; do
+            t_rel="${t#${rel}/}"; in_boundary=0
+            while IFS= read -r b; do
+                [[ -n "${b}" ]] || continue
+                if [[ "${t_rel}" == "${b}/"* || "${t_rel}" == "${b}" ]]; then in_boundary=1; break; fi
+            done < "${subtmp}"
+            [[ ${in_boundary} -eq 1 ]] && continue
+            has_brain=1; break
+        done < <(git -C "${store}" ls-files -z -- "${rel}")
+        if [[ ${has_brain} -eq 1 ]]; then
+            rm -f "${Ftmp}" "${subtmp}"
+            _STORE_SYNC_RESULT="guarded"; return 0
+        fi
+    fi
+
     # Drop orphans: tracked files under rel that are no longer in the brain
-    # (excluding files that belong to a nested boundary subtree).
+    # (excluding files that belong to a nested boundary subtree). `update-index
+    # --force-remove` is used first because it is a pure index op that never
+    # recurses into a linked worktree's gitdir — plain `git rm` exits 128 on a
+    # gitlink (mode 160000), so a stale nested-worktree gitlink would otherwise
+    # survive forever as debris. The `git rm` fallback also cleans the store
+    # working tree for ordinary orphan files.
     while IFS= read -r -d '' t; do
         local t_rel="${t#${rel}/}" b in_boundary=0
         while IFS= read -r b; do
@@ -225,6 +254,7 @@ store_sync_project() {
         done < "${subtmp}"
         [[ ${in_boundary} -eq 1 ]] && continue
         if ! grep -qxF "${t_rel}" "${Ftmp}"; then
+            git -C "${store}" update-index --force-remove -- "${t}" >/dev/null 2>&1 || true
             git -C "${store}" rm -q -- "${t}" >/dev/null 2>&1 || true
         fi
     done < <(git -C "${store}" ls-files -z -- "${rel}")
@@ -234,7 +264,10 @@ store_sync_project() {
     # already filtered by collect_claude_files_in_dir to respect the project's
     # .gitignore + global excludes (clc's own info/exclude disregarded), so the
     # store never receives transitively-ignored files (vendor/…/CLAUDE.md) or
-    # per-machine ones (.claude/settings.local.json).
+    # per-machine ones (.claude/settings.local.json). Files are staged individually;
+    # a blanket `git add -A -- "${rel}"` is deliberately NOT used — it would record
+    # any physically-present nested worktree dir (which holds a `.git` file) as a
+    # submodule gitlink, the very leak that corrupts the parent subtree.
     while IFS= read -r f; do
         [[ -n "${f}" ]] || continue
         mkdir -p "$(dirname "${S}/${f}")"
@@ -242,11 +275,6 @@ store_sync_project() {
         git -C "${store}" add -- "${S}/${f}"
     done < "${Ftmp}"
     rm -f "${Ftmp}"
-
-    # Belt-and-suspenders, subtree-scoped ONLY. Tolerate a vanished subtree
-    # (empty-brain case: the explicit git rm above already removed it) — git
-    # would otherwise emit "fatal: pathspec … did not match any files" to stderr.
-    git -C "${store}" add -A -- "${rel}" 2>/dev/null || true
 
     if git -C "${store}" diff --cached --quiet -- "${rel}"; then
         _STORE_SYNC_RESULT="noop"; return 0
@@ -1103,6 +1131,60 @@ cmd_restore() {
     fi
 
     _apply_restore "${current_worktree}" "${save_dir}"
+}
+
+# Print one labeled reconcile delta from the current _CMP_* globals. Direction is
+# store-relative: '+' = only in store (worktree lacks it), '-' = only in the
+# worktree (store lacks it), '~' = present in both but differing.
+_print_reconcile_delta() {
+    local label="$1"
+    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+    echo "  ${label}"
+    if [[ ${diffs} -eq 0 ]]; then
+        echo "    ${CLR_MUTED}in sync${CLR_RESET}"
+        return 0
+    fi
+    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do printf "    - %s ${CLR_MUTED}(store lacks it)${CLR_RESET}\n" "$f"; done
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};    do printf "    ~ %s ${CLR_MUTED}(differs)${CLR_RESET}\n" "$f"; done
+    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do printf "    + %s ${CLR_MUTED}(only in store)${CLR_RESET}\n" "$f"; done
+}
+
+# `clc reconcile` — read-only 3-way view of the second brain across the current
+# worktree, the central store (canonical), and the main worktree. Surfaces where a
+# worktree's brain has diverged so the user can promote (`clc save`) or take the
+# stored brain (`clc restore`) deliberately. Never mutates anything.
+cmd_reconcile() {
+    [[ $# -eq 0 ]] || die "unexpected argument: $1"
+
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                         || die "unable to determine current worktree"
+
+    local save_dir
+    save_dir=$(store_mirror_dir "${main_worktree}") \
+        || die "no stored brain found — run 'clc save' first"
+
+    print_header "Reconcile"
+
+    if [[ "${current_worktree}" == "${main_worktree}" ]]; then
+        _compare_claude_files "${main_worktree}" "${save_dir}"
+        _print_reconcile_delta "main worktree ↔ store"
+        echo
+        echo "  ${CLR_MUTED}Promote local edits into the store:  clc save${CLR_RESET}"
+        echo "  ${CLR_MUTED}Take the stored brain locally:       clc restore${CLR_RESET}"
+        return 0
+    fi
+
+    _compare_claude_files "${current_worktree}" "${save_dir}"
+    _print_reconcile_delta "current worktree ↔ store"
+    _compare_claude_files "${main_worktree}" "${save_dir}"
+    _print_reconcile_delta "main worktree ↔ store"
+    echo
+    echo "  ${CLR_MUTED}Promote this worktree's edits into the store:  clc save${CLR_RESET}"
+    echo "  ${CLR_MUTED}Take the stored brain into this worktree:      clc restore${CLR_RESET}"
 }
 
 # Restore a project's stored brain into a freshly created worktree. Silent for
@@ -2216,14 +2298,27 @@ cmd_backup() {
 
 # ── v2 sync command (hidden/experimental) ─────────────────────────────────────
 
-# Emit the single non-alarming peer-source warning to STDERR (§6.1). Surfaces
-# through the git hook's output even when --from-hook suppresses stdout. No
-# absolute paths — only the peer worktree's basename — so it stays deterministic.
+# Emit the single non-alarming peer-divergence warning to STDERR. Surfaces through
+# the git hook's output even when --from-hook suppresses stdout. No absolute paths —
+# only the peer worktree's basename — so it stays deterministic. The store mirrors
+# the MAIN worktree (canonical); a peer's diverging brain is NOT auto-synced, so
+# this nudges the user to reconcile deliberately.
 warn_peer_source() {
     local current_worktree="$1"
     local name; name=$(basename "${current_worktree}")
-    printf '%sclc: synced brain from peer worktree '\''%s'\'' — edit the brain in the main worktree%s\n' \
+    printf '%sclc: '\''%s'\'' brain differs from the store — main is canonical; run '\''clc save'\'' here to promote these edits or '\''clc restore'\'' to take the stored brain%s\n' \
         "${CLR_WARN}" "${name}" "${CLR_RESET}" >&2
+}
+
+# Return 0 if the current worktree's brain differs from the stored (canonical)
+# state — used to gate the peer-divergence warning so an in-sync peer commit stays
+# silent. Fail-safe: any error (e.g. no stored state) is treated as "no divergence".
+_peer_brain_diverges() {
+    local main_worktree="$1" current_worktree="$2"
+    local save_dir; save_dir=$(store_mirror_dir "${main_worktree}") || return 1
+    _compare_claude_files "${current_worktree}" "${save_dir}" || return 1
+    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+    [[ ${diffs} -gt 0 ]]
 }
 
 # Sync the current worktree's second brain into the central git store (§6.1:
@@ -2248,18 +2343,20 @@ cmd_sync_all() {
 
 cmd_sync() {
     # --from-hook: run silently + fail-safe (git-hook context must not pollute the
-    # user's commit output). The peer warning still goes to stderr (§6.1).
-    local from_hook=0 opt_all=0
+    # user's commit output). The peer-divergence warning still goes to stderr.
+    local from_hook=0 opt_all=0 opt_force_empty=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --from-hook) from_hook=1 ;;
-            -a|--all)    opt_all=1 ;;
+            --from-hook)   from_hook=1 ;;
+            -a|--all)      opt_all=1 ;;
+            --force-empty) opt_force_empty=1 ;;
             -*) die "unknown option for 'sync': $1" ;;
             *)  die "unexpected argument: $1" ;;
         esac
         shift
     done
     [[ ${from_hook} -eq 1 && ${opt_all} -eq 1 ]] && die "--from-hook and --all are mutually exclusive"
+    [[ ${from_hook} -eq 1 && ${opt_force_empty} -eq 1 ]] && die "--from-hook and --force-empty are mutually exclusive"
     [[ ${opt_all} -eq 1 ]] && { cmd_sync_all; return; }
 
     local main_gitdir main_worktree current_worktree
@@ -2280,10 +2377,19 @@ cmd_sync() {
         # Enrollment gate: a firing hook implies enrollment, but defensively do not
         # resurrect store entries from a stray leftover hook on an unenrolled repo.
         is_enrolled "${main_worktree}" || exit 0
-        # Warn (to stderr) when the committing worktree is a peer, not main.
-        [[ "${current_worktree}" != "${main_worktree}" ]] && warn_peer_source "${current_worktree}"
         store_init >/dev/null 2>&1 || exit 0
-        with_store_lock store_sync_project "${rel}" "${current_worktree}" >/dev/null 2>&1 || true
+        # The store mirrors the MAIN worktree (canonical) regardless of which
+        # worktree fired the hook. This is what makes a commit/checkout in a
+        # brain-less or divergent peer worktree harmless — it can never clobber or
+        # wipe the canonical brain (and never forces past the empty guard).
+        with_store_lock store_sync_project "${rel}" "${main_worktree}" 0 >/dev/null 2>&1 || true
+        # Nudge (to stderr) when the committing worktree is a peer whose brain
+        # diverges from the store — its edits were NOT auto-synced; reconcile them
+        # deliberately with `clc save`/`clc restore`. Fail-safe.
+        if [[ "${current_worktree}" != "${main_worktree}" ]] \
+           && _peer_brain_diverges "${main_worktree}" "${current_worktree}" 2>/dev/null; then
+            warn_peer_source "${current_worktree}"
+        fi
         # Backup is debounced + backgrounded + fail-safe: a successful sync may
         # trigger a push, but it must never block/hang the commit (§4.9/§6.2).
         [[ "${_STORE_SYNC_RESULT}" == "synced" ]] && maybe_trigger_backup
@@ -2298,12 +2404,23 @@ cmd_sync() {
     local rel="${main_worktree#${HOME}/}"
     [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
 
-    # Interactive sync works standalone (no enrollment gate). Warn (to stderr) when
-    # syncing from a peer worktree (§6.1); the sync still proceeds.
-    [[ "${current_worktree}" != "${main_worktree}" ]] && warn_peer_source "${current_worktree}"
+    # Interactive `save` is the DELIBERATE worktree→store promotion path: it syncs
+    # the current worktree's brain (not main's), so a user can push edits made
+    # inside a peer worktree. Nudge (to stderr) that main is canonical.
+    [[ "${current_worktree}" != "${main_worktree}" ]] \
+        && _peer_brain_diverges "${main_worktree}" "${current_worktree}" 2>/dev/null \
+        && warn_peer_source "${current_worktree}"
 
     store_init
-    with_store_lock store_sync_project "${rel}" "${current_worktree}"
+    with_store_lock store_sync_project "${rel}" "${current_worktree}" "${opt_force_empty}"
+
+    if [[ "${_STORE_SYNC_RESULT}" == "guarded" ]]; then
+        local stored; stored=$(git -C "$(clc_store_dir)" ls-files -- "${rel}" 2>/dev/null | grep -c . || true)
+        print_header "Refused"
+        echo "  ${CLR_MUTED}The worktree brain is empty but the store holds ${stored} file(s).${CLR_RESET}"
+        echo "  ${CLR_MUTED}Re-run with --force-empty to erase the stored brain.${CLR_RESET}"
+        return 0
+    fi
 
     print_header "Synced"
     if [[ "${_STORE_SYNC_RESULT}" == "noop" ]]; then
@@ -2626,9 +2743,12 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          ${CLR_MUTED}(gitignore-only; the standalone step within enroll)${CLR_RESET}
   ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
                          ${CLR_MUTED}(gitignore-only)${CLR_RESET}
-  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}          Sync Claude files from the current worktree
-                         into the central store. ${CLR_MUTED}With --all, snapshot every
-                         enrolled repo (runnable from anywhere).${CLR_RESET}
+  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all] [--force-empty]${CLR_RESET}
+                         Sync Claude files from the current worktree into the
+                         central store. ${CLR_MUTED}Refuses to erase a populated store from
+                         an empty worktree brain unless --force-empty is given.
+                         With --all, snapshot every enrolled repo (runnable
+                         from anywhere).${CLR_RESET}
   ${CLR_BOLD}compare${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Compare current worktree against the stored
                          state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.
                          With --all, audit every enrolled repo.${CLR_RESET}
@@ -2638,6 +2758,9 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
   ${CLR_BOLD}restore${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Restore Claude files from the stored state
                          to the current worktree. Prompts before making changes.
                          ${CLR_MUTED}With --all, reconcile every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}reconcile${CLR_RESET}              Show a read-only 3-way view of the brain across the
+                         current worktree, the store, and the main worktree, so you
+                         can promote (save) or take (restore) edits deliberately.
   ${CLR_BOLD}backup${CLR_RESET}                 Force an immediate push of the central store to all
                          configured backup targets ${CLR_MUTED}(remote and/or bundle)${CLR_RESET}.
 
@@ -2700,6 +2823,8 @@ ${CLR_BOLD}Flags:${CLR_RESET}
                      (opens editor with pre-populated message).
   ${CLR_BOLD}-a, --all${CLR_RESET}          ${CLR_MUTED}(save, compare, diff, restore)${CLR_RESET} Operate across every
                      enrolled repo instead of the current one. Runnable anywhere.
+      ${CLR_BOLD}--force-empty${CLR_RESET}  ${CLR_MUTED}(save)${CLR_RESET} Allow erasing the stored brain when the
+                     current worktree's brain is empty.
 
 ${CLR_MUTED}Claude files: CLAUDE.md (any depth), .claude/ (worktree root only).
 Worktrees live under <main worktree>/.claude/worktrees/<name> (clc and Claude Code
@@ -2765,6 +2890,7 @@ main() {
         compare)      cmd_compare ${cmd_args[@]+"${cmd_args[@]}"} ;;
         diff)         cmd_diff ${cmd_args[@]+"${cmd_args[@]}"} ;;
         restore)      cmd_restore ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        reconcile)    cmd_reconcile ${cmd_args[@]+"${cmd_args[@]}"} ;;
         go)           cmd_go ${cmd_args[@]+"${cmd_args[@]}"} ;;
         name|rename)  cmd_name ${cmd_args[@]+"${cmd_args[@]}"} ;;
         new|add)      die "'clc new' was removed in v3 — use 'clc go <branch>' to create-and-launch a worktree" ;;

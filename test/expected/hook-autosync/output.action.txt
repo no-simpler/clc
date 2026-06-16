@@ -1,10 +1,13 @@
 1. main auto-sync — store CLAUDE.md after main commit:
 # edited in main
 
-2. peer auto-sync — warning line on commit stderr:
-clc: synced brain from peer worktree 'feat' — edit the brain in the main worktree
-   store CLAUDE.md after peer commit:
-# edited in peer
+2. peer commit — divergence nudge on commit stderr:
+   nudge emitted
+   store CLAUDE.md after peer commit (still canonical = main):
+# edited in main
 
 3. no-op — store commit count unchanged after non-brain commit:
    store unchanged (no spurious commit)
+
+4. deliberate promotion — store CLAUDE.md after 'clc save' in peer:
+# edited in peer

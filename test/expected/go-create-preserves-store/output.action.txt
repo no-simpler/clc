@@ -1,0 +1,7 @@
+1. store subtree intact after 'clc go' (must list the full brain):
+<project>/.claude/settings.json
+<project>/CLAUDE.md
+
+2. new worktree seeded with the brain:
+   CLAUDE.md restored
+   .claude/settings.json restored

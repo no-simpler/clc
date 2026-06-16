@@ -1,0 +1,15 @@
+1. 'clc save' with an emptied brain is refused:
+Refused
+  The worktree brain is empty but the store holds 2 file(s).
+  Re-run with --force-empty to erase the stored brain.
+
+   store still populated:
+<project>/.claude/settings.json
+<project>/CLAUDE.md
+
+2. 'clc save --force-empty' erases the stored brain:
+Synced
+  0 Claude file(s) → store
+
+   store after force-empty (no brain files):
+   (empty)
