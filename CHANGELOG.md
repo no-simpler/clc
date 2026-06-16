@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-06-16
+
+This is a **breaking release** that reimagines clc's worktree workflow around a single low-friction verb. Your second brain (store, enrollment, save/restore/compare, hooks, backups) is unchanged and migrates without action.
+
+### Added
+- **`clc go [<selector>]` — one verb to resume or create-and-launch a worktree session.** Pick a worktree by number, name, branch, or unique prefix (`clc go 2`, `clc go login`, `clc go feature/login`) and clc `cd`s in and launches `claude` for you — no more hunting for the directory and branch by hand. With no selector it shows a numbered menu (single keystroke to choose). If nothing matches, it *creates* the worktree from that branch and launches it: silently when the branch already exists, with a one-key confirm when it would be a brand-new branch. Flags: `-y` (skip the confirm), `--no-brain` (don't restore the second brain), `--no-launch` (set up only), and `-- <args>` to pass arguments through to `claude` (e.g. `clc go login -- --resume`).
+- **`clc name <selector> <new-name>` — rename a worktree's directory.** Renames clutter like Claude Code's auto-named `bright-running-fox` into something memorable, and *adopts* a worktree created elsewhere into clc's management. The branch is left untouched.
+
+### Changed
+- **Worktrees now live under `<repo>/.claude/worktrees/<name>`** — the exact location `claude --worktree` uses — instead of sibling `<repo>-<name>` directories. clc-created and Claude-Code-created worktrees are now indistinguishable and equally managed. (Creating worktrees here assumes the repo's second brain is locally ignored, which `clc enroll`/`clc ignore` handles.)
+- **`clc status` lists every worktree in one numbered section** (the main worktree is `#1`), with the current worktree marked, so the numbers line up with `clc go <n>`.
+- **All prompts are now single-keystroke** — press `y`, no Enter.
+- **`rm`, `prune`, `pull`, and `close` now take a selector** (index, name, branch, or unique prefix) and operate on worktrees under `.claude/worktrees/` only.
+
+### Removed
+- **`clc new` is gone — use `clc go`**, which now does create-and-launch. Running `clc new` prints a pointer to `clc go`.
+
+### Migration
+- Existing sibling worktrees (`<repo>-<name>`) still appear in `clc status` and launch via `clc go`, but they're treated as **foreign**: `rm`/`prune` won't touch them. Run `clc name <selector> <new-name>` to relocate one under `.claude/worktrees/` and bring it under full management.
+
 ## [2.1.2] - 2026-06-16
 
 ### Fixed
@@ -177,7 +197,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v2.1.2...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/no-simpler/clc/compare/v2.1.2...v3.0.0
 [2.1.2]: https://github.com/no-simpler/clc/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/no-simpler/clc/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/no-simpler/clc/compare/v2.0.2...v2.1.0
