@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-06-16
+
+### Fixed
+- A linked Git worktree nested inside your second brain — most commonly Claude Code's own `.claude/worktrees/<name>/`, a full checkout of the repo — is no longer swallowed into the outer project's brain. Previously `clc ls`/`save` walked straight into it and treated every file in that worktree (potentially tens of thousands) as Claude files. clc now prunes any nested Git boundary (submodule, linked worktree, or nested clone) everywhere the brain is enumerated, so only the real brain is listed, stored, compared, and backed up.
+
 ## [2.1.0] - 2026-06-11
 
 ### Added
@@ -167,7 +172,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/no-simpler/clc/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/no-simpler/clc/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/no-simpler/clc/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/no-simpler/clc/compare/v2.0.0...v2.0.1
