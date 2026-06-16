@@ -554,12 +554,21 @@ _claude_item_git_managed() {
 collect_claude_files_in_dir() {
     local base="$1"
     local -a results=()
+
+    # Prune nested git boundaries (.git internals + submodules / linked worktrees
+    # such as Claude Code's .claude/worktrees/<name>, whose files belong to a
+    # separate project) from the .claude/ walk; -prune keeps find from ever
+    # descending into them, so a nested worktree's tens of thousands of files cost
+    # nothing. The CLAUDE.md walk below prunes the same boundaries via
+    # _find_claude_md_files.
+    local -a prune=(-name ".git") b
+    while IFS= read -r b; do
+        [[ -n "${b}" ]] && prune+=(-o -path "${base}/${b}")
+    done < <(_nested_git_boundaries "${base}")
+
     if [[ -d "${base}/.claude" ]]; then
-        # Prune nested git boundaries (e.g. Claude Code's .claude/worktrees/<name>,
-        # a linked worktree): their files belong to a separate project, not this brain.
         while IFS= read -r f; do results+=("${f#${base}/}"); done \
-            < <(find "${base}/.claude" -type d -exec test -e '{}/.git' ';' -prune -o \
-                    -type f -print 2>/dev/null | sort)
+            < <(find "${base}/.claude" \( "${prune[@]}" \) -prune -o -type f -print 2>/dev/null | sort)
     fi
     while IFS= read -r f; do results+=("${f#${base}/}"); done \
         < <(_find_claude_md_files "${base}")
@@ -590,21 +599,34 @@ _brain_ignored_paths() {
     rm -rf "${gd}"
 }
 
-# Print paths (relative to base) of nested git boundaries: top-level subdirectories
-# that hold a .git entry — a submodule or linked worktree (.git file, e.g. Claude
-# Code's .claude/worktrees/<name>) or a nested clone (.git dir). Their contents
-# belong to a separate project, never the outer brain, so callers prune them. find
-# does not descend past a boundary, so only the outermost ones are returned.
-# Filesystem-based (not `git worktree list`) so it is symlink-proof: the target
-# repo reports a realpath that need not match this symlinked call-site path.
-# BSD/macOS-compatible (no GNU -printf).
+# Print paths (relative to base) of nested git boundaries: a submodule or a linked
+# worktree nested inside base (e.g. Claude Code's .claude/worktrees/<name>). Their
+# contents belong to a separate project, never the outer brain, so callers prune them.
+#
+# Detected via git, not a filesystem walk: a brain that hosts a full nested worktree
+# can have tens of thousands of files, and walking them on every call made
+# `clc compare`/`ls` take ~30s. `git worktree list` + `submodule status` answer in
+# milliseconds without descending into those trees. base is always a worktree
+# toplevel (a realpath, matching the realpaths git records), so the prefix test is
+# exact; a store-mirror subdir yields nothing — its enclosing repo's worktrees do
+# not nest under it and it has no submodules. The one case this does NOT catch is an
+# unregistered hand-placed clone — far rarer than the worktree/submodule cases, and
+# still a strict superset of the prior submodule-only handling.
 _nested_git_boundaries() {
-    local base="$1" d
-    while IFS= read -r d; do printf '%s\n' "${d#${base}/}"; done \
-        < <(find "${base}" -mindepth 1 \
-                \( -name .git -prune \) -o \
-                \( -type d -exec test -e '{}/.git' ';' -prune -print \) 2>/dev/null) \
-        | sort -u
+    local base="$1"
+    {
+        # Linked worktrees registered for this repo, kept only when nested under base
+        # and emitted base-relative. Filtering in awk (not a shell `while` loop)
+        # keeps this clean under `set -euo pipefail`: a loop body of `[[…]] && printf`
+        # returns non-zero whenever a worktree is NOT under base — including the main
+        # worktree — which with pipefail would abort before the submodule check below.
+        # `|| true` guards each read so a git error never trips the same trap.
+        git -C "${base}" worktree list --porcelain 2>/dev/null \
+            | awk -v b="${base}/" '/^worktree / { p = substr($0, 10); if (index(p, b) == 1) print substr(p, length(b) + 1) }' \
+            || true
+        # Submodules (status --recursive prints paths already relative to base).
+        git -C "${base}" submodule status --recursive 2>/dev/null | awk '{print $2}' || true
+    } | sort -u
 }
 
 # Find CLAUDE.md files in a directory, excluding .git internals and nested git
