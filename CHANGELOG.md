@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-06-16
+
+### Fixed
+- `clc compare`, `ls`, and friends are fast again in a project whose second brain hosts a full nested worktree (e.g. Claude Code's `.claude/worktrees/<name>/`). The v2.1.1 nested-boundary check scanned the whole worktree on the filesystem and ran several times per command, so a large repo could take ~30s per invocation; clc now asks Git directly (`git worktree list` + `git submodule status`), bringing it back to about a second. (Trade-off: a nested boundary is now recognized only if Git tracks it as a worktree or submodule — which covers the cases that occur in practice; an unregistered, hand-placed clone dropped inside `.claude/` is no longer auto-excluded.)
+
 ## [2.1.1] - 2026-06-16
 
 ### Fixed
@@ -172,7 +177,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v2.1.2...HEAD
+[2.1.2]: https://github.com/no-simpler/clc/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/no-simpler/clc/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/no-simpler/clc/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/no-simpler/clc/compare/v2.0.1...v2.0.2
