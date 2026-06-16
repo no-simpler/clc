@@ -1,0 +1,8 @@
+Worktrees
+  1  main                     (main)
+  2  login                    (feature/login)
+Select a worktree (number), or Enter to cancel: 
+Launching (feature/login)
+  %%PARENT_DIR%%/main/.claude/worktrees/login
+[claude-stub] cwd=%%PARENT_DIR_ABS%%/main/.claude/worktrees/login
+[claude-stub] args=

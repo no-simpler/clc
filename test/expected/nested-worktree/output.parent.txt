@@ -1,8 +1,5 @@
 Repository (parent dir: %%PARENT_DIR%%)
-  * parent                         (main)
 
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-    parent/.claude/worktrees/wt-a  (feature/x) (dirty)
+Worktrees
+  1 * parent  (main)
+  2   wt-a    (feature/x) (dirty)

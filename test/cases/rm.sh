@@ -24,18 +24,18 @@ git add README.md
 ${GIT} commit -q -m "Initial commit"
 
 # Clean peer.
-git worktree add -q "${CASE_DIR}/main-feat" -b feat
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/feat" -b feat
 # Dirty peer (staged change).
-git worktree add -q "${CASE_DIR}/main-other" -b other
-echo "dirty" > "${CASE_DIR}/main-other/dirty.txt"
-git -C "${CASE_DIR}/main-other" add dirty.txt
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/other" -b other
+echo "dirty" > "${CASE_DIR}/main/.claude/worktrees/other/dirty.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/other" add dirty.txt
 
 echo "--- rm dirty peer (fail: uncommitted changes) ---"
 cd "${CASE_DIR}/main"
 "$BASH" "${CLC}" --no-color rm other || true
 
 echo "--- rm current worktree (fail: current) ---"
-cd "${CASE_DIR}/main-feat"
+cd "${CASE_DIR}/main/.claude/worktrees/feat"
 "$BASH" "${CLC}" --no-color rm feat || true
 
 echo "--- rm clean peer (success) ---"

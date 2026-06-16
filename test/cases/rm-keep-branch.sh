@@ -22,13 +22,13 @@ git add README.md
 ${GIT} commit -q -m "Initial commit"
 
 # merged: no extra commits.
-git worktree add -q "${CASE_DIR}/main-merged" -b merged
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/merged" -b merged
 
 # unmerged: add a commit that is not in main.
-git worktree add -q "${CASE_DIR}/main-unmerged" -b unmerged
-echo "unique" > "${CASE_DIR}/main-unmerged/unique.txt"
-git -C "${CASE_DIR}/main-unmerged" add unique.txt
-${GIT} -C "${CASE_DIR}/main-unmerged" commit -q -m "Unique commit"
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/unmerged" -b unmerged
+echo "unique" > "${CASE_DIR}/main/.claude/worktrees/unmerged/unique.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/unmerged" add unique.txt
+${GIT} -C "${CASE_DIR}/main/.claude/worktrees/unmerged" commit -q -m "Unique commit"
 
 echo "--- rm --keep-branch merged (worktree removed, branch kept) ---"
 cd "${CASE_DIR}/main"

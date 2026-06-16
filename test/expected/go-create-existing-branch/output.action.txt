@@ -1,0 +1,10 @@
+Created (feature/x)
+  %%PARENT_DIR%%/main/.claude/worktrees/x
+
+(no saved state — run 'clc save' to save Claude files first)
+
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main  (main)
+  2   x     (feature/x)

@@ -1,0 +1,1 @@
+clc: error: 'clc new' was removed in v3 — use 'clc go <branch>' to create-and-launch a worktree

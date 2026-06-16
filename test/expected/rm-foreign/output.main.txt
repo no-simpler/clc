@@ -1,0 +1,5 @@
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main         (main)
+  2   main-legacy  (feature/legacy)

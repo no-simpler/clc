@@ -20,11 +20,15 @@ echo "original" > shared.txt
 git add shared.txt
 ${GIT} commit -q -m "Initial commit"
 
+# Locally ignore the brain so the nested .claude/worktrees/ checkout never dirties
+# the main worktree (mirrors a real enrolled repo).
+"$BASH" "${CLC}" --no-color ignore > /dev/null
+
 # Create peer and modify the same file.
-git worktree add -q "${CASE_DIR}/main-feat" -b feat
-echo "peer change" > "${CASE_DIR}/main-feat/shared.txt"
-git -C "${CASE_DIR}/main-feat" add shared.txt
-${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Peer modifies shared.txt"
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/feat" -b feat
+echo "peer change" > "${CASE_DIR}/main/.claude/worktrees/feat/shared.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/feat" add shared.txt
+${GIT} -C "${CASE_DIR}/main/.claude/worktrees/feat" commit -q -m "Peer modifies shared.txt"
 
 # Advance primary with a conflicting change to the same file.
 cd "${CASE_DIR}/main"
@@ -42,4 +46,4 @@ ${GIT} commit -q -m "Primary modifies shared.txt"
 echo "--- main clean? ---"
 git -C "${CASE_DIR}/main" status --porcelain | wc -l | tr -d ' '
 echo "--- peer clean? ---"
-git -C "${CASE_DIR}/main-feat" status --porcelain | wc -l | tr -d ' '
+git -C "${CASE_DIR}/main/.claude/worktrees/feat" status --porcelain | wc -l | tr -d ' '

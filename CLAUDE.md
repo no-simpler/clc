@@ -9,17 +9,17 @@ The goal is to enable user to work with Claude Code effectively and efficiently 
   - Avoids replicating Git features — only implements helpful add-on layer.
 - Detects **current repo** at call-site.
   - Distinguishes each current repo by path to its **main worktree** (path to its main `.git` directory).
-  - Distinguishes main worktree from **peer worktrees** (any other worktree).
-  - Distinguishes **current worktree** as worktree from which this command was called (can be main or one of the peers).
-- Distinguishes **managed worktrees** from unmanaged ones.
-  - Managed worktree is either the main worktree or a peer worktree that follows path convention.
-  - Path convention for managed peer worktree: if main worktree is at `/repos/main-repo`, managed peer peer worktree is at `/repos/main-repo-<worktree-name>`.
-  - Allows easily creating and deleting managed worktrees.
-  - Allows convenience actions on worktrees.
+  - Distinguishes the main worktree from the other worktrees.
+  - Distinguishes the **current worktree** as the worktree from which this command was called (can be the main or any other).
+- Worktree model (v3): worktrees fold into Claude Code's own location.
+  - A **managed** worktree lives at `<main worktree>/.claude/worktrees/<name>` — the same path `claude --worktree` uses, so clc-created and Claude-Code-created worktrees are indistinguishable and equally managed.
+  - A worktree anywhere else (a checkout outside that dir) is **foreign**: still listed and launchable, but never auto-removed by `rm`/`prune` (adopt it first with `clc name`).
+  - The nested worktrees are kept out of the second brain by `_nested_git_boundaries` (they are separate projects); creating a worktree under `.claude/worktrees/` therefore assumes the brain is locally ignored (`clc enroll`/`ignore`), or the main tree shows it as untracked.
+  - `clc go` is the one-verb resume-or-create launcher; `clc name` renames a worktree's directory (and adopts a foreign one); `rm`/`prune`/`pull`/`close` operate on managed worktrees by **selector** (index/name/branch/unique-prefix).
 - Defines **Claude-related files** as:
   - `CLAUDE.md` file (at any depth of worktree).
   - `/.claude/` directory (only in the root of worktree) with all contents.
-- Manages Claude-related files (the "second brain") only in managed worktrees.
+- Manages Claude-related files (the "second brain") per worktree.
   - Allows ignoring these files locally (via `.git/info/exclude`).
   - **Enrollment** (`enroll`) fully manages a repo; `save`/`compare`/`restore` operate against the central git store; `ignore`/`unignore` are the gitignore-only step.
 
@@ -34,12 +34,12 @@ The owner (this machine's user) is the **prime** audience; published is secondar
 
 ## Architecture (v2)
 
-- **Central store** — a non-bare git repo at `$(clc_data_dir)/store` (default `~/.local/share/clc/store`). Its working tree mirrors each enrolled project's second brain under a **HOME-relative path** (e.g. `Developer/clc/CLAUDE.md`). Real git history replaces v1's timestamp snapshots. `save`/`restore`/`compare`/`diff`/`ls`/`new` all back onto the store HEAD mirror.
+- **Central store** — a non-bare git repo at `$(clc_data_dir)/store` (default `~/.local/share/clc/store`). Its working tree mirrors each enrolled project's second brain under a **HOME-relative path** (e.g. `Developer/clc/CLAUDE.md`). Real git history replaces v1's timestamp snapshots. `save`/`restore`/`compare`/`diff`/`ls`/`go` all back onto the store HEAD mirror.
   - Sync (`store_sync_project`) is **copy-based, delete-aware, and subtree-scoped**: it re-materializes only that project's `-- "$rel"` subtree (removes orphans, copies current brain, commits), so a concurrent project's in-flight subtree is never swept. Submodule subtrees are skipped (they are nested projects). This is the single most bug-prone area — keep every git path `$rel`-scoped.
 - **Registry / manifest** — committed *into* the store at `.clc/registry`. Line-oriented TAB-separated text (`<HOME-relative path> TAB <origin-url> [TAB meta…]`), **sorted on every write**, atomic (`render → .tmp → mv`). It is both the local registry and the cross-machine cold-start manifest. (Config uses git-config; the registry uses text because a multi-machine-synced manifest merges far more cleanly as sorted one-line-per-project text.)
 - **Identity = HOME-relative path** of the **main worktree**. A repo outside `$HOME` has no identity → error, never guess. Moves are handled by an explicit `clc relink` (a fresh clone has no stable ID anyway, and a silent cross-machine move is a footgun).
 - **Enrollment (4 steps)** — `enroll` = local-gitignore the brain + register in the manifest + install hooks + initial sync. `unenroll` reverses all four. `ignore`/`unignore` are aliases for the gitignore-only step.
-- **Hooks** — `post-commit` + `post-merge` + `post-checkout`, installed **once** at the main gitdir (honoring `core.hooksPath`). Each is a fail-safe, non-blocking shim (`clc sync --from-hook … || true`) wrapped in a sentinel-marked block (`# >>> clc managed >>>` … `# <<< clc managed <<<`) — composes with husky/lefthook, never clobbers user content, cleanly uninstalls by sentinel. Cadence is **best-effort**: commit/merge/checkout fire; `git rebase` does *not* fire for replayed commits → manual `clc sync`. A commit in any worktree syncs *that worktree's* brain (current-worktree-wins); a peer source prints a warning.
+- **Hooks** — `post-commit` + `post-merge` + `post-checkout`, installed **once** at the main gitdir (honoring `core.hooksPath`). Each is a fail-safe, non-blocking shim (`clc sync --from-hook … || true`) wrapped in a sentinel-marked block (`# >>> clc managed >>>` … `# <<< clc managed <<<`) — composes with husky/lefthook, never clobbers user content, cleanly uninstalls by sentinel. Cadence is **best-effort**: commit/merge/checkout fire; `git rebase` does *not* fire for replayed commits → manual `clc sync`. A commit in any worktree syncs *that worktree's* brain (current-worktree-wins); a non-main source prints a warning.
 - **Backups** — git-config subsections in the config file (`[clc "backup.<name>"] kind = remote|bundle; …`). Decoupled from the per-commit store sync: a successful sync triggers a **debounced** (default 15 min, configurable), **backgrounded, fail-safe** push to all targets; `clc backup` forces an immediate synchronous push. Bundle targets write a single small blob rotated atomically with `.prev`. Per-target last-success stamps + a failure log live under the state dir.
 - **XDG locations** — config `~/.config/clc` (the `config` file; sync/track this), data `~/.local/share/clc` (store + registry), state `~/.local/state/clc` (locks, backup stamps/log). Defaults follow the XDG spec; `CLC_STORE` overrides the data/store root (back-compat + test isolation). Reads are guarded (`git config … || true`) so a missing key never trips `set -euo pipefail`.
 - **Concurrency** — every store mutation takes a mandatory **mkdir-based** advisory lock (`with_store_lock`, no `flock` dependency) under the state dir.
@@ -51,7 +51,7 @@ The snapshot suite stays green by construction:
 
 - **Routine output is content-derived, not history-derived.** `status`/`doctor` report sync *state* (in-sync / drifted / never-synced) by diffing the worktree brain against the store HEAD mirror — no SHAs, no dates. The one wall-clock exception is backup-staleness age in `status`/`doctor`, pinned via the `CLC_NOW` seam.
 - **Store commits keep real wall-clock dates** in production; a fixed clc identity + `commit.gpgsign=false` are stamped once into the store's own `.git/config` at `store_init` (no per-commit `-c`).
-- **Harness** pins `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` in fixtures, isolates `XDG_*_HOME` + `CLC_STORE`, applies one shared SHA-scrub (`%%SHA%%`) in `run.sh`, and uses `CLC_SYNC_SYNC=1` (synchronous backup push, capturable) + `CLC_NOW=<epoch>` (pins all wall-clock math) for backup tests.
+- **Harness** pins `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` in fixtures, isolates `XDG_*_HOME` + `CLC_STORE`, applies one shared SHA-scrub (`%%SHA%%`) in `run.sh`, and uses `CLC_SYNC_SYNC=1` (synchronous backup push, capturable) + `CLC_NOW=<epoch>` (pins all wall-clock math) for backup tests. `CLC_LAUNCH_CMD` overrides the launched binary (default `claude`) so `go` tests point it at a deterministic stub instead of spawning Claude Code.
 
 A determinism-breaking change ships its normalization in the **same** commit — never leave the suite red.
 

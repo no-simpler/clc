@@ -94,3 +94,32 @@ Conventions:
 - Do **not** snapshot bundle/remote contents (they carry SHAs/dates). Assert **existence + `git bundle verify`** (bundle) or **`git -C remote.git rev-parse --verify <branch>`** (remote), and `echo` a fixed OK line into the action snapshot instead of the verify output.
 - A bare remote created under the case dir would be picked up by the runner's `*/` worktree discovery and produce a spurious (error) snapshot. Place it under a **dot-dir** (`${CASE_DIR}/.remote/remote.git`) so the glob skips it.
 - The per-worktree `output.<wt>.txt` status snapshots are **omitted** for backup cases: the runner runs those plain `clc` invocations without `CLC_NOW`, so the staleness age would be wall-clock-relative and drift daily. The deterministic Backups-status coverage lives in the **action** snapshot instead (a `clc status` call made inside the case script with `CLC_NOW` pinned → e.g. "just now"). Compare mode only checks snapshots that exist, so deleting the auto-generated `output.main.txt` after `--update` keeps the case green.
+
+## Worktrees (v3)
+
+In v3, a **managed** worktree lives under `<main-worktree>/.claude/worktrees/<name>` (the same location Claude Code's `claude --worktree` uses); the old sibling convention (`<parent>/<main-base>-<name>`) is gone, and a worktree anywhere else is **foreign**. `clc status` lists every worktree in one numbered `Worktrees` section (main is #1), each row `<n> <marker> <label> (<branch>)[ (dirty)]` — `*` marks the current worktree; the label is the name for main/managed and a parent-relative (or `~`-shortened) path for foreign.
+
+Implications for fixtures and snapshots:
+
+- **Create managed worktrees nested**, not as siblings: `git worktree add -q "${CASE_DIR}/main/.claude/worktrees/<name>" <branchargs>`. Selector arguments to `clc` (`clc rm <name>`, `clc go <branch>`, …) resolve by index/name/branch/prefix, so they are unchanged by the move.
+- **Nested worktrees are NOT auto-snapshotted.** The runner's `*/` glob only discovers **top-level** dirs in `playground/<case>/`, so a worktree under `main/.claude/worktrees/` has no `output.<wt>.txt`. Assert managed worktrees via the **`main` status** (`output.main.txt`) and via **action output** — e.g. a `clc status` run from inside the nested worktree to surface current-worktree-level warnings (see `claude-file-states.sh`).
+- A managed worktree under `main/.claude/worktrees/` makes `main`'s working tree show an untracked `.claude/` dir, so `main` reports `(dirty)` / "Claude files detected" unless the brain is locally ignored. Run `clc ignore > /dev/null` early in `go`/`name` fixtures to keep `main` clean.
+- A FOREIGN worktree (top-level sibling or detached checkout) is kept at the top level so it **does** get an `output.<wt>.txt` and shows in status as a foreign (path-labelled) row. `base.sh`/`dirty.sh` keep one managed worktree (nested) plus a detached `unmanaged/` sibling to exercise both categories.
+- When a `name`/adopt action **moves** a top-level sibling under `.claude/worktrees/`, its old top-level dir no longer exists; delete the stale auto-generated `output.<sibling>.txt` after `--update` (a snapshot whose dir is gone fails in compare mode).
+
+## Launching claude (`CLC_LAUNCH_CMD`)
+
+`clc go` execs `claude` (or `$CLC_LAUNCH_CMD`) in the resolved worktree. For launch tests, point `CLC_LAUNCH_CMD` at a **stub** so nothing real is spawned and the output is deterministic. Write the stub into a **dot-dir** (`${CASE_DIR}/.bin/claude-stub`) so the runner's `*/` glob skips it:
+
+```bash
+mkdir -p "${CASE_DIR}/.bin"
+cat > "${CASE_DIR}/.bin/claude-stub" <<'EOF'
+#!/usr/bin/env bash
+echo "[claude-stub] cwd=$(pwd)"
+echo "[claude-stub] args=$*"
+EOF
+chmod +x "${CASE_DIR}/.bin/claude-stub"
+export CLC_LAUNCH_CMD="${CASE_DIR}/.bin/claude-stub"
+```
+
+The stub's `cwd=` line prints an absolute path under the playground, normalized to `%%PARENT_DIR_ABS%%/…`; its `args=` line captures any `-- <claude args…>` passthrough (see `go-resume-name.sh`, `go-passthrough.sh`). To exercise the create-or-resume logic **without** launching, pass `--no-launch` (clc prints `clc status` instead of exec'ing); a brand-new branch also prompts for confirmation, so pass `-y` in non-interactive setup (or `printf 'y' |`) when you want the create to proceed (see `hook-autosync.sh`, `go-create-new-branch.sh`).

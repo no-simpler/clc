@@ -2,9 +2,9 @@
 # base.sh – Sets up a baseline repo state for clc verification.
 #
 # Produces in test/playground/base/:
-#   main/       – main worktree (branch: main)
-#   main-feature/ – managed peer worktree (branch: feature/some-feature)
-#   unmanaged/  – unmanaged worktree (detached HEAD)
+#   main/       – main worktree (branch: main); holds the managed worktree under
+#                 main/.claude/worktrees/feature (branch: feature/some-feature)
+#   unmanaged/  – foreign worktree (detached HEAD), a top-level sibling
 
 set -euo pipefail
 
@@ -29,11 +29,11 @@ git -c user.email="clc@test" -c user.name="clc-test" -c commit.gpgsign=false \
 # Branch for the managed peer worktree
 git branch feature/some-feature
 
-# ── Managed peer worktree ─────────────────────────────────────────────────────
+# ── Managed worktree (nested under .claude/worktrees/) ────────────────────────
 
-git worktree add -q "${CASE_DIR}/main-feature" feature/some-feature
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/feature" feature/some-feature
 
-# ── Unmanaged worktree (detached HEAD) ───────────────────────────────────────
+# ── Foreign worktree (detached HEAD, top-level sibling) ───────────────────────
 
 git worktree add -q --detach "${CASE_DIR}/unmanaged"
 

@@ -1,0 +1,4 @@
+--- rename current worktree (fail) ---
+clc: error: cannot rename the current worktree
+--- rename main worktree (fail) ---
+clc: error: cannot rename the main worktree

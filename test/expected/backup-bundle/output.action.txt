@@ -6,13 +6,9 @@ bundle: exists and verifies OK
 bundle rotation: .prev exists and verifies OK
 
 Repository (parent dir: %%PARENT_DIR%%)
-  * main  (main)
 
 Backups
   local (bundle)  just now
 
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>
+Worktrees
+  1 * main  (main)

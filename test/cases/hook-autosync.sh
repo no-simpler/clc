@@ -3,8 +3,8 @@
 # (post-commit → `clc sync --from-hook`) and auto-sync the brain into the store.
 #
 # Produces in test/playground/hook-autosync/:
-#   main/         – enrolled main worktree (hooks installed by enroll)
-#   main-feat/    – managed peer worktree at the convention path
+#   main/                       – enrolled main worktree (hooks installed by enroll)
+#   main/.claude/worktrees/feat – managed peer worktree (nested convention path)
 #
 # Asserts (all state-based — never snapshots raw git-commit stdout/SHAs):
 #   1. Main-worktree auto-sync: editing CLAUDE.md + committing in main fires the
@@ -62,9 +62,10 @@ echo "1. main auto-sync — store CLAUDE.md after main commit:"
 git -C "${STORE}" show "HEAD:${PREFIX}/CLAUDE.md"
 
 # ── 2. Peer-worktree auto-sync + warning. ──
-# Create a managed peer at the convention path via clc new.
-(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color new feat) > /dev/null 2>&1
-PEER="${CASE_DIR}/main-feat"
+# Create a managed peer at the nested convention path via clc go (new branch →
+# -y skips the confirm prompt; --no-launch skips the binary launch).
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color go feat -y --no-launch) > /dev/null 2>&1
+PEER="${CASE_DIR}/main/.claude/worktrees/feat"
 
 cd "${PEER}"
 echo "# edited in peer" > CLAUDE.md

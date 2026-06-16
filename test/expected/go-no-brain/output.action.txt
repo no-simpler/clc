@@ -1,0 +1,8 @@
+Created (feature/x)
+  %%PARENT_DIR%%/main/.claude/worktrees/x
+
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main  (main)
+  2   x     (feature/x)

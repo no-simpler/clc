@@ -19,11 +19,15 @@ echo "# pull-commit" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
+# Locally ignore the brain so the nested .claude/worktrees/ checkout never dirties
+# the main worktree (mirrors a real enrolled repo).
+"$BASH" "${CLC}" --no-color ignore > /dev/null
+
 # Create peer and make a change.
-git worktree add -q "${CASE_DIR}/main-feat" -b feat
-echo "committed feature" > "${CASE_DIR}/main-feat/feature.txt"
-git -C "${CASE_DIR}/main-feat" add feature.txt
-${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Add feature"
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/feat" -b feat
+echo "committed feature" > "${CASE_DIR}/main/.claude/worktrees/feat/feature.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/feat" add feature.txt
+${GIT} -C "${CASE_DIR}/main/.claude/worktrees/feat" commit -q -m "Add feature"
 
 # Pull with --commit (auto-accept editor).
 cd "${CASE_DIR}/main"

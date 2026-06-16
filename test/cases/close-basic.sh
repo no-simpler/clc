@@ -19,11 +19,15 @@ echo "# close-basic" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
+# Locally ignore the brain so the nested .claude/worktrees/ checkout never dirties
+# the main worktree (mirrors a real enrolled repo).
+"$BASH" "${CLC}" --no-color ignore > /dev/null
+
 # Create peer and make a change.
-git worktree add -q "${CASE_DIR}/main-feat" -b feat
-echo "feature" > "${CASE_DIR}/main-feat/feature.txt"
-git -C "${CASE_DIR}/main-feat" add feature.txt
-${GIT} -C "${CASE_DIR}/main-feat" commit -q -m "Add feature"
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/feat" -b feat
+echo "feature" > "${CASE_DIR}/main/.claude/worktrees/feat/feature.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/feat" add feature.txt
+${GIT} -C "${CASE_DIR}/main/.claude/worktrees/feat" commit -q -m "Add feature"
 
 # Close from main worktree.
 cd "${CASE_DIR}/main"
@@ -31,7 +35,7 @@ cd "${CASE_DIR}/main"
 
 # Verify worktree directory is gone.
 echo "--- worktree removed? ---"
-[[ ! -d "${CASE_DIR}/main-feat" ]] && echo "yes" || echo "no"
+[[ ! -d "${CASE_DIR}/main/.claude/worktrees/feat" ]] && echo "yes" || echo "no"
 
 # Verify branch is gone.
 echo "--- branch deleted? ---"

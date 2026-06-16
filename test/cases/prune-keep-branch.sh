@@ -22,16 +22,16 @@ echo "# clc test – prune-keep-branch" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-git worktree add -q "${CASE_DIR}/main-merged" -b merged
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/merged" -b merged
 
-git worktree add -q "${CASE_DIR}/main-unmerged" -b unmerged
-echo "unique" > "${CASE_DIR}/main-unmerged/unique.txt"
-git -C "${CASE_DIR}/main-unmerged" add unique.txt
-${GIT} -C "${CASE_DIR}/main-unmerged" commit -q -m "Unique commit"
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/unmerged" -b unmerged
+echo "unique" > "${CASE_DIR}/main/.claude/worktrees/unmerged/unique.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/unmerged" add unique.txt
+${GIT} -C "${CASE_DIR}/main/.claude/worktrees/unmerged" commit -q -m "Unique commit"
 
-git worktree add -q "${CASE_DIR}/main-dirty" -b dirty
-echo "change" > "${CASE_DIR}/main-dirty/change.txt"
-git -C "${CASE_DIR}/main-dirty" add change.txt
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/dirty" -b dirty
+echo "change" > "${CASE_DIR}/main/.claude/worktrees/dirty/change.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/dirty" add change.txt
 
 echo "--- prune --keep-branch (merged and unmerged removed, dirty skipped, branches kept) ---"
 cd "${CASE_DIR}/main"

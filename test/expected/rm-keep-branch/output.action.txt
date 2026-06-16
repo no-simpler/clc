@@ -1,26 +1,19 @@
 --- rm --keep-branch merged (worktree removed, branch kept) ---
 Removed
-  %%PARENT_DIR%%/main-merged  (merged)
+  %%PARENT_DIR%%/main/.claude/worktrees/merged  (merged)
 
 Repository (parent dir: %%PARENT_DIR%%)
-  * main      (main)
+
+Worktrees
+  1 * main      (main) (dirty)
       Claude files not ignored
-
-Managed worktrees
-    unmerged  (unmerged)
-
-Unmanaged worktrees
-  <none>
+  2   unmerged  (unmerged)
 --- rm --keep-branch unmerged (worktree removed, branch kept) ---
 Removed
-  %%PARENT_DIR%%/main-unmerged  (unmerged)
+  %%PARENT_DIR%%/main/.claude/worktrees/unmerged  (unmerged)
 
 Repository (parent dir: %%PARENT_DIR%%)
-  * main  (main)
+
+Worktrees
+  1 * main  (main)
       Claude files not ignored
-
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>

@@ -1,0 +1,25 @@
+=== status from main ===
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main   (main) (dirty)
+      Claude files only partially ignored
+  2   clean  (feature/clean)
+  3   dirty  (feature/dirty)
+=== status from dirty ===
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1   main   (main) (dirty)
+      Claude files only partially ignored
+  2   clean  (feature/clean)
+  3 * dirty  (feature/dirty)
+      Claude files detected; Claude files in .gitignore
+=== status from clean ===
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1   main   (main) (dirty)
+      Claude files only partially ignored
+  2 * clean  (feature/clean)
+  3   dirty  (feature/dirty)

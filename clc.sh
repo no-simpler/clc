@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="2.1.2"
+CLC_VERSION="3.0.0"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
@@ -39,6 +39,16 @@ need_cmd() { command -v "$1" &>/dev/null || die "'$1' not found on PATH"; }
 
 # Shorten a path by replacing $HOME prefix with ~.
 short_path() { echo "~${1#${HOME}}"; }
+
+# Single-keystroke yes/no prompt — accepts one char, no Enter required (and works
+# under piped input in tests). Echoes a newline after. Returns 0 for y/Y only.
+confirm() {
+    local prompt="$1" response=""
+    printf "%s" "${prompt}"
+    read -rsn1 response || response=""
+    echo
+    [[ "${response}" =~ ^[Yy]$ ]]
+}
 
 # Join the remaining args with the first arg as separator.
 _join() {
@@ -489,18 +499,24 @@ git_current_worktree() {
     git rev-parse --show-toplevel 2>/dev/null
 }
 
-# ── Managed-worktree helpers ──────────────────────────────────────────────────
+# ── Worktree helpers ──────────────────────────────────────────────────────────
 
-# List all worktrees for the repo.
-# Prints tab-separated lines: <type>\t<name>\t<path>\t<branch>
-# type   = "main" | "peer" | "unmanaged"
-# name   = "main" for main; suffix after "<base>-" for peers; empty for unmanaged
+# clc-managed worktrees live under <main worktree>/.claude/worktrees/<name>, the
+# same location Claude Code's own `claude --worktree` uses. clc and Claude Code
+# worktrees are therefore indistinguishable and equally managed; "foreign" covers
+# any other worktree (e.g. a legacy v2 sibling or a checkout elsewhere).
+worktrees_root() { echo "$1/.claude/worktrees"; }
+
+# List all worktrees for the repo, in `git worktree list` order (canonical:
+# the line index, 1-based, is the stable selector accepted by `clc go N`).
+# Prints \002-separated lines: <type>\002<name>\002<path>\002<branch>\002<dirty>
+# type   = "main" | "managed" | "foreign"
+# name   = basename for main and managed; empty for foreign
 # branch = branch name, "<detached>", or "<unknown>"
+# dirty  = "dirty" when the worktree has staged or unstaged changes, else empty
 list_all_worktrees() {
     local main_worktree="$1"
-    local parent base
-    parent=$(dirname "${main_worktree}")
-    base=$(basename "${main_worktree}")
+    local wt_root; wt_root="$(worktrees_root "${main_worktree}")"
 
     # git worktree list output: <path> <hash> [<branch>]  (or "(HEAD detached ...)")
     while IFS= read -r line; do
@@ -519,14 +535,91 @@ list_all_worktrees() {
         [[ -n "$(git -C "${wt_path}" status --porcelain 2>/dev/null)" ]] && wt_dirty="dirty"
 
         if [[ "${wt_path}" == "${main_worktree}" ]]; then
-            printf '%s\n' "main"$'\002'"main"$'\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
-        elif [[ "${wt_path}" == "${parent}/${base}-"* ]]; then
-            local wt_name="${wt_path##*/${base}-}"
-            printf '%s\n' "peer"$'\002'"${wt_name}"$'\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
+            printf '%s\n' "main"$'\002'"$(basename "${main_worktree}")"$'\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
+        elif [[ "${wt_path}" == "${wt_root}/"* ]]; then
+            local wt_name="${wt_path#${wt_root}/}"
+            printf '%s\n' "managed"$'\002'"${wt_name}"$'\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
         else
-            printf '%s\n' "unmanaged"$'\002\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
+            printf '%s\n' "foreign"$'\002\002'"${wt_path}"$'\002'"${wt_branch}"$'\002'"${wt_dirty}"
         fi
     done < <(git -C "${main_worktree}" worktree list 2>/dev/null)
+}
+
+# Derive a worktree directory name from a branch/selector: take the last
+# slash-component, then strip a leading ticket prefix (PROJ-123_ / PROJ-123-) so
+# both `feature/login` and `feature/AOE-123-login` yield `login`. Validates the
+# result and dies on an invalid name.
+derive_worktree_name() {
+    local full="$1" name="${1##*/}"
+    if [[ "${name}" =~ ^[A-Z]+-[0-9]+[-_]+(.+)$ ]]; then
+        name="${BASH_REMATCH[1]}"
+    fi
+    [[ "${name}" =~ ^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)*$ ]] \
+        || die "invalid worktree name derived from '${full}': '${name}'"
+    echo "${name}"
+}
+
+# Resolve a selector to an EXISTING worktree. On a unique match, echoes the full
+# list_all_worktrees line (<type>\002<name>\002<path>\002<branch>\002<dirty>) and
+# returns 0. Returns 1 (no match) or 2 (ambiguous). Selector forms, in order:
+# 1-based index | exact managed name | exact branch | unique prefix of name/branch.
+resolve_worktree() {
+    local main_worktree="$1" sel="$2"
+    local -a rows=()
+    local row
+    while IFS= read -r row; do rows+=("${row}"); done < <(list_all_worktrees "${main_worktree}")
+    local count=${#rows[@]} i type name path branch dirty
+
+    if [[ "${sel}" =~ ^[0-9]+$ ]]; then
+        local idx=$(( sel - 1 ))
+        [[ ${idx} -ge 0 && ${idx} -lt ${count} ]] || return 1
+        printf '%s\n' "${rows[idx]}"; return 0
+    fi
+
+    for i in "${!rows[@]}"; do
+        IFS=$'\002' read -r type name path branch dirty <<< "${rows[i]}"
+        if [[ ( -n "${name}" && "${name}" == "${sel}" ) || "${branch}" == "${sel}" ]]; then
+            printf '%s\n' "${rows[i]}"; return 0
+        fi
+    done
+
+    local match=-1 nmatch=0
+    for i in "${!rows[@]}"; do
+        IFS=$'\002' read -r type name path branch dirty <<< "${rows[i]}"
+        if [[ ( -n "${name}" && "${name}" == "${sel}"* ) \
+           || ( "${branch}" != "<"* && "${branch}" == "${sel}"* ) ]]; then
+            match=${i}; nmatch=$(( nmatch + 1 ))
+        fi
+    done
+    [[ ${nmatch} -eq 1 ]] && { printf '%s\n' "${rows[match]}"; return 0; }
+    [[ ${nmatch} -gt 1 ]] && return 2
+    return 1
+}
+
+# Human-friendly label for a worktree row: the name for main/managed; a
+# parent-relative or ~-shortened path for foreign worktrees (which live elsewhere).
+wt_label() {
+    local type="$1" name="$2" path="$3" parent_dir_abs="$4"
+    case "${type}" in
+        main|managed) echo "${name}" ;;
+        *) if [[ "${path}" == "${parent_dir_abs}/"* ]]; then
+               echo "${path#${parent_dir_abs}/}"
+           else
+               short_path "${path}"
+           fi ;;
+    esac
+}
+
+# Replace this process with `claude` (or $CLC_LAUNCH_CMD) running inside <wt>.
+# The exec hands the terminal to Claude Code; clc does not resume afterwards.
+# CLC_LAUNCH_CMD is the test seam (a stub that echoes its cwd + args).
+_launch_claude() {
+    local wt="$1"; shift
+    local cmd="${CLC_LAUNCH_CMD:-claude}"
+    command -v "${cmd}" >/dev/null 2>&1 \
+        || die "'${cmd}' not found on PATH — is Claude Code installed?"
+    cd "${wt}" || die "cannot enter worktree: ${wt}"
+    exec "${cmd}" "$@"
 }
 
 # ── Claude-file helpers ───────────────────────────────────────────────────────
@@ -713,10 +806,7 @@ _apply_restore() {
     _print_compare_output
 
     if [[ ${destructive_diffs} -gt 0 ]]; then
-        printf "\nSynchronize? (Data loss possible!) [y/N] "
-        read -r response || response="n"
-        echo
-        if [[ ! "${response}" =~ ^[Yy]$ ]]; then
+        if ! confirm $'\nSynchronize? (Data loss possible!) [y/N] '; then
             echo "Aborted."
             return 1
         fi
@@ -1015,46 +1105,55 @@ cmd_restore() {
     _apply_restore "${current_worktree}" "${save_dir}"
 }
 
-cmd_new() {
-    local opt_no_claude=0 full_name="" branch=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -n|--no-claude) opt_no_claude=1 ;;
-            -*) die "unknown option for 'new': $1" ;;
-            *)  if   [[ -z "${full_name}" ]]; then full_name="$1"
-                elif [[ -z "${branch}"    ]]; then branch="$1"
-                else die "unexpected argument: $1"
-                fi ;;
-        esac
-        shift
-    done
-    [[ -n "${full_name}" ]] || die "usage: clc new [-n|--no-claude] <name> [<branch>]"
-
-    # Derive worktree name: last slash-component, then strip leading ticket prefix.
-    local name="${full_name##*/}"
-    if [[ "${name}" =~ ^[A-Z]+-[0-9]+[-_]+(.+)$ ]]; then
-        name="${BASH_REMATCH[1]}"
+# Restore a project's stored brain into a freshly created worktree. Silent for
+# pure additions; prompts (single-key) before destructive changes. Prints a
+# "(no saved state)" note when nothing is stored yet.
+_restore_brain_into() {
+    local main_worktree="$1" wt="$2"
+    local save_dir
+    if save_dir=$(store_mirror_dir "${main_worktree}"); then
+        _compare_claude_files "${wt}" "${save_dir}"
+        local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
+        local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+        if [[ ${diffs} -eq 0 ]]; then
+            echo "All ${total} Claude file(s) in new worktree are in sync with storage."
+            echo
+        else
+            _apply_restore "${wt}" "${save_dir}" || true
+            echo
+        fi
+    else
+        echo "${CLR_MUTED}(no saved state — run 'clc save' to save Claude files first)${CLR_RESET}"
+        echo
     fi
-    [[ "${name}" =~ ^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)*$ ]] \
-        || die "invalid worktree name derived from '${full_name}': '${name}'"
+}
 
-    # Branch: explicit arg → full first arg.
-    [[ -z "${branch}" ]] && branch="${full_name}"
+# Create a managed worktree under .claude/worktrees/<name> for <selector>, restore
+# the brain (unless opt_no_brain), then launch claude (unless opt_no_launch).
+# Branch = the selector verbatim; dir name = derived from it (ticket prefix stripped).
+_go_create() {
+    local main_worktree="$1" selector="$2" opt_yes="$3" opt_no_brain="$4" opt_no_launch="$5"
 
-    local main_gitdir main_worktree
-    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
-    main_worktree=$(git_main_worktree "${main_gitdir}") \
-                                         || die "unable to determine main worktree"
+    local name; name=$(derive_worktree_name "${selector}") || exit 1
+    local branch="${selector}"
+    local wt_root; wt_root="$(worktrees_root "${main_worktree}")"
+    local new_path="${wt_root}/${name}"
 
-    local parent base new_path
-    parent=$(dirname "${main_worktree}")
-    base=$(basename "${main_worktree}")
-    new_path="${parent}/${base}-${name}"
+    [[ -e "${new_path}" ]] \
+        && die "worktree '${name}' already exists (.claude/worktrees/${name}); did you mean 'clc go ${name}'?"
 
-    [[ -e "${new_path}" ]] && die "directory already exists: ${new_path}"
+    local branch_exists=0
+    git -C "${main_worktree}" rev-parse --verify "refs/heads/${branch}" >/dev/null 2>&1 && branch_exists=1
 
-    # Check out existing branch or create a new one.
-    if git -C "${main_worktree}" rev-parse --verify "refs/heads/${branch}" >/dev/null 2>&1; then
+    # Smart prompt: an existing branch is materialized silently; a brand-new branch
+    # is confirmed first (skipped with -y). An empty/EOF answer cancels safely.
+    if [[ ${branch_exists} -eq 0 && ${opt_yes} -eq 0 ]]; then
+        confirm "Create worktree on new branch '${branch}'? [y/N] " \
+            || { echo "Cancelled."; return 0; }
+    fi
+
+    mkdir -p "${wt_root}"
+    if [[ ${branch_exists} -eq 1 ]]; then
         git -C "${main_worktree}" worktree add "${new_path}" "${branch}" >/dev/null 2>&1 \
             || die "failed to create worktree '${name}' on branch '${branch}' (already checked out elsewhere?)"
     else
@@ -1062,45 +1161,98 @@ cmd_new() {
             || die "failed to create worktree '${name}' with new branch '${branch}'"
     fi
 
-    print_header "Created"
-    printf "  %s  %s(%s)%s\n" "$(short_path "${new_path}")" "${CLR_MUTED}" "${branch}" "${CLR_RESET}"
+    print_header "Created" "${branch}"
+    printf "  %s\n" "$(short_path "${new_path}")"
     echo
 
-    if [[ ${opt_no_claude} -eq 0 ]]; then
-        local save_dir
-        if save_dir=$(store_mirror_dir "${main_worktree}"); then
-            _compare_claude_files "${new_path}" "${save_dir}"
-            local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
-            local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
-            if [[ ${diffs} -eq 0 ]]; then
-                echo "All ${total} Claude file(s) in new worktree are in sync with storage."
-                echo
-            else
-                _apply_restore "${new_path}" "${save_dir}" || true
-                echo
-            fi
-        else
-            echo "${CLR_MUTED}(no saved state — run 'clc save' to save Claude files first)${CLR_RESET}"
-            echo
-        fi
-    fi
+    [[ ${opt_no_brain} -eq 0 ]] && _restore_brain_into "${main_worktree}" "${new_path}"
 
-    cmd_status
+    if [[ ${opt_no_launch} -eq 0 ]]; then
+        _launch_claude "${new_path}"
+    else
+        cmd_status
+    fi
 }
 
-cmd_rm() {
-    local opt_keep_branch=0 name=""
+# `clc go [<selector>] [-y] [--no-brain] [--no-launch] [-- <claude args>…]`
+# Resume claude in an existing worktree, or — when the selector matches none —
+# create the worktree (from the selector as branch) and launch it. With no
+# selector, shows an interactive numbered menu.
+cmd_go() {
+    local opt_yes=0 opt_no_brain=0 opt_no_launch=0 selector=""
+    local -a pass=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -k|--keep-branch) opt_keep_branch=1 ;;
-            -*) die "unknown option for 'rm': $1" ;;
-            *)  if [[ -z "${name}" ]]; then name="$1"
+            -y|--yes)    opt_yes=1 ;;
+            --no-brain)  opt_no_brain=1 ;;
+            --no-launch) opt_no_launch=1 ;;
+            --)          shift; pass=("$@"); break ;;
+            -*) die "unknown option for 'go': $1" ;;
+            *)  if [[ -z "${selector}" ]]; then selector="$1"
                 else die "unexpected argument: $1"
                 fi ;;
         esac
         shift
     done
-    [[ -n "${name}" ]] || die "usage: clc rm [-k|--keep-branch] <name>"
+
+    local main_gitdir main_worktree
+    main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                         || die "unable to determine main worktree"
+
+    # No selector → interactive numbered menu (reads a choice from stdin).
+    if [[ -z "${selector}" ]]; then
+        local -a rows=()
+        local row
+        while IFS= read -r row; do rows+=("${row}"); done < <(list_all_worktrees "${main_worktree}")
+        local parent_dir_abs; parent_dir_abs=$(dirname "${main_worktree}")
+        local i type name path branch dirty label
+        print_header "Worktrees"
+        for i in "${!rows[@]}"; do
+            IFS=$'\002' read -r type name path branch dirty <<< "${rows[i]}"
+            label=$(wt_label "${type}" "${name}" "${path}" "${parent_dir_abs}")
+            printf "  %d  %-24s ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                $(( i + 1 )) "${label}" "${branch}" "${dirty:+ ${CLR_MUTED}(dirty)${CLR_RESET}}"
+        done
+        printf "Select a worktree (number), or Enter to cancel: "
+        read -r selector || selector=""
+        echo
+        [[ -n "${selector}" ]] || { echo "Cancelled."; return 0; }
+    fi
+
+    # Try to resume an existing worktree.
+    local row rc
+    rc=0; row=$(resolve_worktree "${main_worktree}" "${selector}") || rc=$?
+    [[ ${rc} -eq 2 ]] && die "ambiguous selector '${selector}' — matches more than one worktree"
+    if [[ ${rc} -eq 0 ]]; then
+        local type name path branch dirty
+        IFS=$'\002' read -r type name path branch dirty <<< "${row}"
+        print_header "Launching" "${branch}"
+        printf "  %s\n" "$(short_path "${path}")"
+        _launch_claude "${path}" ${pass[@]+"${pass[@]}"}
+        return 0
+    fi
+
+    # No match → create.
+    _go_create "${main_worktree}" "${selector}" "${opt_yes}" "${opt_no_brain}" "${opt_no_launch}"
+}
+
+# `clc name <selector> <new-name>` — rename a worktree's DIRECTORY only (branch
+# untouched), moving it to .claude/worktrees/<derived>. Also adopts a foreign
+# worktree (e.g. a legacy v2 sibling) into the managed location.
+cmd_name() {
+    local selector="" new_name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) die "unknown option for 'name': $1" ;;
+            *)  if   [[ -z "${selector}" ]]; then selector="$1"
+                elif [[ -z "${new_name}" ]]; then new_name="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+    [[ -n "${selector}" && -n "${new_name}" ]] || die "usage: clc name <selector> <new-name>"
 
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
@@ -1109,15 +1261,63 @@ cmd_rm() {
     current_worktree=$(git_current_worktree) \
                                       || die "unable to determine current worktree"
 
-    # Find the peer by name.
-    local wt_path="" wt_branch="" wt_dirty=""
-    while IFS=$'\002' read -r type row_name path branch dirty; do
-        if [[ "${type}" == "peer" && "${row_name}" == "${name}" ]]; then
-            wt_path="${path}"; wt_branch="${branch}"; wt_dirty="${dirty}"
-        fi
-    done < <(list_all_worktrees "${main_worktree}")
+    local row rc
+    rc=0; row=$(resolve_worktree "${main_worktree}" "${selector}") || rc=$?
+    [[ ${rc} -eq 2 ]] && die "ambiguous selector '${selector}' — matches more than one worktree"
+    [[ ${rc} -eq 0 ]] || die "no worktree matches '${selector}'"
 
-    [[ -n "${wt_path}" ]]                          || die "no managed peer worktree named '${name}'"
+    local type name path branch dirty
+    IFS=$'\002' read -r type name path branch dirty <<< "${row}"
+    [[ "${type}" != "main" ]]                || die "cannot rename the main worktree"
+    [[ "${path}" != "${current_worktree}" ]] || die "cannot rename the current worktree"
+
+    local n; n=$(derive_worktree_name "${new_name}") || exit 1
+    local wt_root; wt_root="$(worktrees_root "${main_worktree}")"
+    local new_path="${wt_root}/${n}"
+    [[ "${new_path}" != "${path}" ]] || die "worktree is already named '${n}'"
+    [[ -e "${new_path}" ]] && die "worktree '${n}' already exists (.claude/worktrees/${n})"
+
+    mkdir -p "${wt_root}"
+    git -C "${main_worktree}" worktree move "${path}" "${new_path}" >/dev/null 2>&1 \
+        || die "failed to move worktree to '${n}' (uncommitted changes? locked?)"
+
+    print_header "Renamed" "${branch}"
+    printf "  %s → %s\n" "$(short_path "${path}")" "$(short_path "${new_path}")"
+    echo
+
+    cmd_status
+}
+
+cmd_rm() {
+    local opt_keep_branch=0 selector=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -k|--keep-branch) opt_keep_branch=1 ;;
+            -*) die "unknown option for 'rm': $1" ;;
+            *)  if [[ -z "${selector}" ]]; then selector="$1"
+                else die "unexpected argument: $1"
+                fi ;;
+        esac
+        shift
+    done
+    [[ -n "${selector}" ]] || die "usage: clc rm [-k|--keep-branch] <selector>"
+
+    local main_gitdir main_worktree current_worktree
+    main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
+    main_worktree=$(git_main_worktree "${main_gitdir}") \
+                                      || die "unable to determine main worktree"
+    current_worktree=$(git_current_worktree) \
+                                      || die "unable to determine current worktree"
+
+    # Resolve the selector; rm is scoped to managed worktrees only.
+    local row rc type name wt_path wt_branch wt_dirty
+    rc=0; row=$(resolve_worktree "${main_worktree}" "${selector}") || rc=$?
+    [[ ${rc} -eq 2 ]] && die "ambiguous selector '${selector}' — matches more than one worktree"
+    [[ ${rc} -eq 0 ]] || die "no worktree matches '${selector}'"
+    IFS=$'\002' read -r type name wt_path wt_branch wt_dirty <<< "${row}"
+
+    [[ "${type}" == "managed" ]] \
+        || die "'${name:-${selector}}' is not a clc-managed worktree — run 'clc name' to adopt it, or use 'git worktree remove'"
     [[ "${wt_path}" != "${current_worktree}" ]]    || die "cannot remove current worktree '${name}'"
     [[ -z "${wt_dirty}" ]]                         || die "worktree '${name}' has uncommitted changes"
 
@@ -1160,10 +1360,11 @@ cmd_prune() {
     current_worktree=$(git_current_worktree) \
                                       || die "unable to determine current worktree"
 
-    # Collect eligible peers first so we can print "(nothing to prune)" before touching anything.
+    # Collect eligible managed worktrees first so we can print "(nothing to prune)"
+    # before touching anything. Foreign worktrees are never auto-removed.
     local -a to_remove=()
     while IFS=$'\002' read -r type name path branch dirty; do
-        [[ "${type}" == "peer" ]]                || continue
+        [[ "${type}" == "managed" ]]             || continue
         [[ "${path}" != "${current_worktree}" ]] || continue
         [[ -z "${dirty}" ]]                      || continue
         to_remove+=("${name}"$'\002'"${path}"$'\002'"${branch}")
@@ -1353,61 +1554,24 @@ cmd_status() {
     [[ ${state_tracked}    -eq 1     ]] && cur_warnings+=("Claude files detected")
     [[ ${state_gitignore}  -eq 1     ]] && cur_warnings+=("Claude files in .gitignore")
 
-    # Collect worktrees by category
-    local main_branch="<unknown>"
-    local -a peer_rows=() unmanaged_rows=()
-    local max_peer_name_len=0
-
-    local main_dirty=""
-    while IFS=$'\002' read -r type name path branch dirty; do
-        case "${type}" in
-            main)     main_branch="${branch}"; main_dirty="${dirty}" ;;
-            peer)     peer_rows+=("${name}"$'\002'"${path}"$'\002'"${branch}"$'\002'"${dirty}")
-                      [[ ${#name} -gt ${max_peer_name_len} ]] && max_peer_name_len=${#name} ;;
-            unmanaged) unmanaged_rows+=("${path}"$'\002'"${branch}"$'\002'"${dirty}") ;;
-        esac
-    done < <(list_all_worktrees "${main_worktree}")
-
-    # Parent dir is shared by all managed worktrees; printed once in section 1.
+    # Collect all worktrees in canonical (git worktree list) order; the unified
+    # Worktrees section numbers them, main included as #1.
     local parent_dir_abs parent_dir_disp
     parent_dir_abs=$(dirname "${main_worktree}")
     parent_dir_disp=$(short_path "${parent_dir_abs}")
 
-    # Compute max visible content width across all sections for branch alignment.
-    # Use basename for main worktree and short names for peers (already names).
-    local main_name; main_name=$(basename "${main_worktree}")
-    local max_content_len=${#main_name}
-    [[ ${max_peer_name_len} -gt ${max_content_len} ]] && max_content_len=${max_peer_name_len}
-    for row in ${unmanaged_rows[@]+"${unmanaged_rows[@]}"}; do
-        local u_path u_branch u_display
-        IFS=$'\002' read -r u_path u_branch <<< "${row}"
-        if [[ "${u_path}" == "${parent_dir_abs}/"* ]]; then
-            u_display="${u_path##${parent_dir_abs}/}"
-        else
-            u_display=$(short_path "${u_path}")
-        fi
-        [[ ${#u_display} -gt ${max_content_len} ]] && max_content_len=${#u_display}
-    done
+    local -a wt_rows=()
+    local row type name path branch dirty
+    local max_label=0
+    while IFS= read -r row; do
+        wt_rows+=("${row}")
+        IFS=$'\002' read -r type name path branch dirty <<< "${row}"
+        local lbl; lbl=$(wt_label "${type}" "${name}" "${path}" "${parent_dir_abs}")
+        [[ ${#lbl} -gt ${max_label} ]] && max_label=${#lbl}
+    done < <(list_all_worktrees "${main_worktree}")
 
-    # Section 1: Repository & main worktree
+    # Section 1: Repository (the worktrees themselves are listed below).
     print_header "Repository" "parent dir: ${parent_dir_disp}"
-    local main_pad
-    main_pad=$(( max_content_len - ${#main_name} ))
-    local main_dirty_suffix=""
-    [[ -n "${main_dirty}" ]] && main_dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
-    if [[ "${main_worktree}" == "${current_worktree}" ]]; then
-        printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-            "${max_content_len}" "${main_name}" "${main_branch}" "${main_dirty_suffix}"
-        # Combine main-level and current-level warnings (same line is both).
-        local -a combined_warnings=()
-        [[ ${#main_warnings[@]} -gt 0 ]] && combined_warnings+=("${main_warnings[@]}")
-        [[ ${#cur_warnings[@]}  -gt 0 ]] && combined_warnings+=("${cur_warnings[@]}")
-        if [[ ${#combined_warnings[@]} -gt 0 ]]; then print_warning_line "${combined_warnings[@]}"; fi
-    else
-        printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-            "${max_content_len}" "${main_name}" "${main_branch}" "${main_dirty_suffix}"
-        if [[ ${#main_warnings[@]} -gt 0 ]]; then print_warning_line "${main_warnings[@]}"; fi
-    fi
 
     # Section 1.5: Enrollment (only when enrolled — absent otherwise so unenrolled
     # snapshots stay byte-identical).
@@ -1452,54 +1616,38 @@ cmd_status() {
         done <<< "${_bt}"
     fi
 
-    # Section 2: Managed worktrees
+    # Section 2: Worktrees — one numbered list, main included as #1, in canonical
+    # order. The number is the stable selector accepted by `clc go N`. Managed and
+    # Claude Code worktrees show their name; foreign worktrees show their path.
     echo
-    print_header "Managed worktrees"
-    if [[ ${#peer_rows[@]} -eq 0 ]]; then
-        echo "  ${CLR_MUTED}<none>${CLR_RESET}"
-    else
-        for row in "${peer_rows[@]}"; do
-            local name path branch dirty dirty_suffix
-            IFS=$'\002' read -r name path branch dirty <<< "${row}"
-            dirty_suffix=""
-            [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
-            if [[ "${path}" == "${current_worktree}" ]]; then
-                printf "  ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-                    "${max_content_len}" "${name}" "${branch}" "${dirty_suffix}"
-                if [[ ${#cur_warnings[@]} -gt 0 ]]; then print_warning_line "${cur_warnings[@]}"; fi
-            else
-                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-                    "${max_content_len}" "${name}" "${branch}" "${dirty_suffix}"
-            fi
-        done
-    fi
+    print_header "Worktrees"
+    local num_width=${#wt_rows[@]}; num_width=${#num_width}
+    local i=0
+    for row in "${wt_rows[@]}"; do
+        i=$(( i + 1 ))
+        IFS=$'\002' read -r type name path branch dirty <<< "${row}"
+        local label dirty_suffix
+        label=$(wt_label "${type}" "${name}" "${path}" "${parent_dir_abs}")
+        dirty_suffix=""
+        [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
 
-    # Section 3: Unmanaged worktrees
-    echo
-    print_header "Unmanaged worktrees"
-    if [[ ${#unmanaged_rows[@]} -eq 0 ]]; then
-        echo "  ${CLR_MUTED}<none>${CLR_RESET}"
-    else
-        for row in "${unmanaged_rows[@]}"; do
-            local path branch dirty dirty_suffix u_disp
-            IFS=$'\002' read -r path branch dirty <<< "${row}"
-            dirty_suffix=""
-            [[ -n "${dirty}" ]] && dirty_suffix=" ${CLR_MUTED}(dirty)${CLR_RESET}"
-            if [[ "${path}" == "${parent_dir_abs}/"* ]]; then
-                u_disp="${path##${parent_dir_abs}/}"
-            else
-                u_disp=$(short_path "${path}")
-            fi
-            if [[ "${path}" == "${current_worktree}" ]]; then
-                printf "  ${CLR_BOLD}*${CLR_RESET} %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-                    "${max_content_len}" "${u_disp}" "${branch}" "${dirty_suffix}"
-                if [[ ${#cur_warnings[@]} -gt 0 ]]; then print_warning_line "${cur_warnings[@]}"; fi
-            else
-                printf "    %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
-                    "${max_content_len}" "${u_disp}" "${branch}" "${dirty_suffix}"
-            fi
-        done
-    fi
+        local is_current=0; [[ "${path}" == "${current_worktree}" ]] && is_current=1
+        if [[ ${is_current} -eq 1 ]]; then
+            printf "  ${CLR_MUTED}%*d${CLR_RESET} ${CLR_BOLD}*${CLR_RESET} ${CLR_BOLD}%-*s${CLR_RESET}  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                "${num_width}" "${i}" "${max_label}" "${label}" "${branch}" "${dirty_suffix}"
+        else
+            printf "  ${CLR_MUTED}%*d${CLR_RESET}   %-*s  ${CLR_MUTED}(%s)${CLR_RESET}%s\n" \
+                "${num_width}" "${i}" "${max_label}" "${label}" "${branch}" "${dirty_suffix}"
+        fi
+
+        # Attach warnings: main-level under the main row, current-level under the
+        # current row (combined when the main worktree is also current).
+        local -a row_warnings=()
+        [[ "${type}" == "main" && ${#main_warnings[@]} -gt 0 ]] && row_warnings+=("${main_warnings[@]}")
+        [[ ${is_current} -eq 1   && ${#cur_warnings[@]}  -gt 0 ]] && row_warnings+=("${cur_warnings[@]}")
+        [[ ${#row_warnings[@]} -gt 0 ]] && print_warning_line "${row_warnings[@]}"
+    done
+    return 0
 }
 
 # ── Transplant ────────────────────────────────────────────────────────────────
@@ -1508,7 +1656,7 @@ cmd_status() {
 # merge --squash.  Sets _PULL_WT_PATH, _PULL_WT_BRANCH, _PULL_FILE_COUNT for
 # the caller.  Does NOT commit or remove.
 _do_pull() {
-    local cmd="$1" name="$2"
+    local cmd="$1" selector="$2"
 
     # ── resolve context ──────────────────────────────────────────────────
     local main_gitdir main_worktree current_worktree
@@ -1521,14 +1669,14 @@ _do_pull() {
     [[ "${current_worktree}" == "${main_worktree}" ]] \
         || die "must be run from the main worktree (currently in '$(short_path "${current_worktree}")')"
 
-    # 2. Find peer by name.
-    local wt_path="" wt_branch="" wt_dirty=""
-    while IFS=$'\002' read -r type row_name path branch dirty; do
-        if [[ "${type}" == "peer" && "${row_name}" == "${name}" ]]; then
-            wt_path="${path}"; wt_branch="${branch}"; wt_dirty="${dirty}"
-        fi
-    done < <(list_all_worktrees "${main_worktree}")
-    [[ -n "${wt_path}" ]]   || die "no managed peer worktree named '${name}'"
+    # 2. Resolve the selector to a managed worktree.
+    local row rc type name wt_path wt_branch wt_dirty
+    rc=0; row=$(resolve_worktree "${main_worktree}" "${selector}") || rc=$?
+    [[ ${rc} -eq 2 ]] && die "ambiguous selector '${selector}' — matches more than one worktree"
+    [[ ${rc} -eq 0 ]] || die "no worktree matches '${selector}'"
+    IFS=$'\002' read -r type name wt_path wt_branch wt_dirty <<< "${row}"
+    [[ "${type}" == "managed" ]] \
+        || die "'${name:-${selector}}' is not a clc-managed worktree"
 
     # 3. Main worktree is clean.
     [[ -z "$(git -C "${main_worktree}" status --porcelain)" ]] \
@@ -1608,7 +1756,7 @@ cmd_pull() {
         esac
         shift
     done
-    [[ -n "${name}" ]] || die "usage: clc pull [-c|--commit] <name>"
+    [[ -n "${name}" ]] || die "usage: clc pull [-c|--commit] <selector>"
 
     _do_pull "pull" "${name}"
 
@@ -1637,7 +1785,7 @@ cmd_close() {
         esac
         shift
     done
-    [[ -n "${name}" ]] || die "usage: clc close [-c|--commit] [-k|--keep-branch] <name>"
+    [[ -n "${name}" ]] || die "usage: clc close [-c|--commit] [-k|--keep-branch] <selector>"
 
     _do_pull "close" "${name}"
 
@@ -2464,7 +2612,7 @@ ${CLR_BOLD}Options:${CLR_RESET}
       ${CLR_BOLD}--no-gpg${CLR_RESET}    Suppress GPG commit signing
 
 ${CLR_BOLD}Actions (Inspect):${CLR_RESET}
-  ${CLR_BOLD}status${CLR_RESET}                 Show repository info and managed worktrees ${CLR_MUTED}(default)${CLR_RESET}
+  ${CLR_BOLD}status${CLR_RESET}                 Show repository info and the numbered worktree list ${CLR_MUTED}(default)${CLR_RESET}
   ${CLR_BOLD}ls${CLR_RESET}${CLR_MUTED}|list${CLR_RESET}                List Claude files. Tracked or git-visible
                          files are marked.
 
@@ -2494,31 +2642,35 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          configured backup targets ${CLR_MUTED}(remote and/or bundle)${CLR_RESET}.
 
 ${CLR_BOLD}Actions (Worktrees):${CLR_RESET}
-  ${CLR_BOLD}new${CLR_RESET}${CLR_MUTED}|add${CLR_RESET} ${CLR_MUTED}[-n|--no-claude]${CLR_RESET} <name> ${CLR_MUTED}[<branch>]${CLR_RESET}
-                         Create a new managed peer worktree and restore Claude
-                         files from the stored state. Worktree name
-                         derived from <name>: last path component, ticket
-                         prefix stripped ${CLR_MUTED}(e.g. feature/PROJ-123_foo → foo)${CLR_RESET}.
-                         Branch defaults to <name> as-is; pass <branch> to
-                         override. Checks out existing branch or creates new.
-  ${CLR_BOLD}rm${CLR_RESET}${CLR_MUTED}|remove${CLR_RESET} ${CLR_MUTED}[-k|--keep-branch]${CLR_RESET} <name>
-                         Remove a managed peer worktree and delete its git
-                         branch. Fails if the worktree is current or has
-                         uncommitted changes.
+  ${CLR_BOLD}go${CLR_RESET} ${CLR_MUTED}[-y] [--no-brain] [--no-launch]${CLR_RESET} ${CLR_MUTED}[<selector>] [-- <claude args>…]${CLR_RESET}
+                         Launch claude in a worktree. With no selector, shows a
+                         numbered menu. If <selector> matches an existing worktree
+                         (by number, name, branch, or unique prefix) it resumes
+                         there; otherwise it creates a worktree under
+                         .claude/worktrees/<name> on branch <selector> and launches
+                         it. Worktree name derived from <selector>: last path
+                         component, ticket prefix stripped ${CLR_MUTED}(feature/PROJ-123_foo → foo)${CLR_RESET}.
+  ${CLR_BOLD}name${CLR_RESET}${CLR_MUTED}|rename${CLR_RESET} <selector> <new-name>
+                         Rename a worktree's directory (branch untouched), moving
+                         it to .claude/worktrees/<new-name>. Also adopts a foreign
+                         worktree (e.g. a legacy sibling) into the managed location.
+  ${CLR_BOLD}rm${CLR_RESET}${CLR_MUTED}|remove${CLR_RESET} ${CLR_MUTED}[-k|--keep-branch]${CLR_RESET} <selector>
+                         Remove a managed worktree and delete its git branch.
+                         Fails for foreign worktrees, or if the worktree is
+                         current or has uncommitted changes.
   ${CLR_BOLD}prune${CLR_RESET}${CLR_MUTED}|clean${CLR_RESET} ${CLR_MUTED}[-k|--keep-branch]${CLR_RESET}
-                         Remove all managed peer worktrees that are not current
-                         and have no uncommitted changes. Deletes their git
-                         branches by default.
+                         Remove all managed worktrees that are not current and
+                         have no uncommitted changes. Deletes their git branches
+                         by default.
 
 ${CLR_BOLD}Actions (Transplant):${CLR_RESET}
-  ${CLR_BOLD}pull${CLR_RESET} ${CLR_MUTED}[-c|--commit]${CLR_RESET} <name>
-                         Transplant all changes from a peer worktree's branch
-                         onto the current (primary) branch as staged changes.
-                         Rebases the peer branch if needed. Must be run from
-                         the main worktree.
-  ${CLR_BOLD}close${CLR_RESET} ${CLR_MUTED}[-c|--commit] [-k|--keep-branch]${CLR_RESET} <name>
-                         Same as pull, then removes the peer worktree and
-                         deletes its branch (like rm).
+  ${CLR_BOLD}pull${CLR_RESET} ${CLR_MUTED}[-c|--commit]${CLR_RESET} <selector>
+                         Transplant all changes from a worktree's branch onto the
+                         current (primary) branch as staged changes. Rebases the
+                         branch if needed. Must be run from the main worktree.
+  ${CLR_BOLD}close${CLR_RESET} ${CLR_MUTED}[-c|--commit] [-k|--keep-branch]${CLR_RESET} <selector>
+                         Same as pull, then removes the worktree and deletes its
+                         branch (like rm).
 
 ${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
   ${CLR_BOLD}doctor${CLR_RESET}                 Report cross-machine drift for every enrolled repo
@@ -2540,14 +2692,18 @@ ${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
 ${CLR_BOLD}Flags:${CLR_RESET}
   ${CLR_BOLD}-k, --keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune, close)${CLR_RESET} Keep the worktree's git branch
                      instead of deleting it.
-  ${CLR_BOLD}-n, --no-claude${CLR_RESET}    ${CLR_MUTED}(new)${CLR_RESET} Skip restoring Claude files from saved state.
+  ${CLR_BOLD}-y, --yes${CLR_RESET}          ${CLR_MUTED}(go)${CLR_RESET} Skip the confirmation prompt when creating a
+                     worktree on a brand-new branch.
+      ${CLR_BOLD}--no-brain${CLR_RESET}     ${CLR_MUTED}(go)${CLR_RESET} Skip restoring Claude files into the new worktree.
+      ${CLR_BOLD}--no-launch${CLR_RESET}    ${CLR_MUTED}(go)${CLR_RESET} Create the worktree but do not launch claude.
   ${CLR_BOLD}-c, --commit${CLR_RESET}       ${CLR_MUTED}(pull, close)${CLR_RESET} Commit immediately after staging
                      (opens editor with pre-populated message).
   ${CLR_BOLD}-a, --all${CLR_RESET}          ${CLR_MUTED}(save, compare, diff, restore)${CLR_RESET} Operate across every
                      enrolled repo instead of the current one. Runnable anywhere.
 
 ${CLR_MUTED}Claude files: CLAUDE.md (any depth), .claude/ (worktree root only).
-Managed worktrees: main worktree or peer at <parent>/<main-name>-<worktree-name>.
+Worktrees live under <main worktree>/.claude/worktrees/<name> (clc and Claude Code
+share this location); a worktree elsewhere is "foreign" and not auto-removed.
 Run 'clc' without arguments for repository and worktree status.${CLR_RESET}
 EOF
 }
@@ -2609,7 +2765,9 @@ main() {
         compare)      cmd_compare ${cmd_args[@]+"${cmd_args[@]}"} ;;
         diff)         cmd_diff ${cmd_args[@]+"${cmd_args[@]}"} ;;
         restore)      cmd_restore ${cmd_args[@]+"${cmd_args[@]}"} ;;
-        new|add)      cmd_new ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        go)           cmd_go ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        name|rename)  cmd_name ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        new|add)      die "'clc new' was removed in v3 — use 'clc go <branch>' to create-and-launch a worktree" ;;
         rm|remove)    cmd_rm ${cmd_args[@]+"${cmd_args[@]}"} ;;
         prune|clean)  cmd_prune ${cmd_args[@]+"${cmd_args[@]}"} ;;
         pull)         cmd_pull ${cmd_args[@]+"${cmd_args[@]}"} ;;

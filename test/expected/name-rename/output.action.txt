@@ -1,0 +1,8 @@
+Renamed (feature/login)
+  %%PARENT_DIR%%/main/.claude/worktrees/login → %%PARENT_DIR%%/main/.claude/worktrees/signin
+
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main    (main)
+  2   signin  (feature/login)

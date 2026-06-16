@@ -14,7 +14,7 @@ Could not apply <sha>... # Peer modifies shared.txt
 clc: error: rebase failed due to conflicts — both worktrees are clean.
 To proceed manually:
 
-  cd %%PARENT_DIR%%/main-feat && git rebase main
+  cd %%PARENT_DIR%%/main/.claude/worktrees/feat && git rebase main
   # resolve conflicts, then: git rebase --continue
 
   cd %%PARENT_DIR%%/main && clc pull feat

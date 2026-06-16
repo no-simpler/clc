@@ -2,17 +2,13 @@ Relinked
   %%PARENT_DIR_HOME%%/old → %%PARENT_DIR_HOME%%/moved
 
 Repository (parent dir: %%PARENT_DIR%%)
-  * moved  (main)
 
 Enrollment
   enrolled
   hooks: post-commit, post-merge, post-checkout
 
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>
+Worktrees
+  1 * moved  (main)
 
 registry:
 # clc registry — enrolled projects. Fields: <HOME-relative path> TAB <origin-url> [TAB <meta>…]

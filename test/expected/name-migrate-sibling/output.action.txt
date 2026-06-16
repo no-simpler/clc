@@ -1,0 +1,8 @@
+Renamed (feature/legacy)
+  %%PARENT_DIR%%/main-legacy → %%PARENT_DIR%%/main/.claude/worktrees/adopted
+
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main     (main)
+  2   adopted  (feature/legacy)

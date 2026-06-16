@@ -4,14 +4,10 @@ Unenrolled
   brain dropped from store
 
 Repository (parent dir: %%PARENT_DIR%%)
-  * main  (main) (dirty)
+
+Worktrees
+  1 * main  (main) (dirty)
       Claude files not ignored
-
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>
 
 .git/info/exclude contains CLC patterns:
   no

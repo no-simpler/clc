@@ -1,12 +1,8 @@
 Repository (parent dir: %%PARENT_DIR%%)
-  * drift  (main)
 
 Enrollment
   enrolled
   hooks: post-commit, post-merge, post-checkout
 
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>
+Worktrees
+  1 * drift  (main)

@@ -1,0 +1,1 @@
+clc: error: 'feature/legacy' is not a clc-managed worktree — run 'clc name' to adopt it, or use 'git worktree remove'

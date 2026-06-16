@@ -21,12 +21,12 @@ echo "# clc test – prune" > README.md
 git add README.md
 ${GIT} commit -q -m "Initial commit"
 
-git worktree add -q "${CASE_DIR}/main-clean1" -b clean1
-git worktree add -q "${CASE_DIR}/main-clean2" -b clean2
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/clean1" -b clean1
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/clean2" -b clean2
 # Dirty peer: should survive the prune.
-git worktree add -q "${CASE_DIR}/main-dirty" -b dirty
-echo "change" > "${CASE_DIR}/main-dirty/change.txt"
-git -C "${CASE_DIR}/main-dirty" add change.txt
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/dirty" -b dirty
+echo "change" > "${CASE_DIR}/main/.claude/worktrees/dirty/change.txt"
+git -C "${CASE_DIR}/main/.claude/worktrees/dirty" add change.txt
 
 echo "--- prune (removes clean1 and clean2, skips dirty) ---"
 cd "${CASE_DIR}/main"

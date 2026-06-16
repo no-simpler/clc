@@ -2,9 +2,10 @@
 # dirty.sh – Sets up a repo state with dirty worktrees for clc verification.
 #
 # Produces in test/playground/dirty/:
-#   main/         – main worktree (branch: main, DIRTY – unstaged change)
-#   main-feature/ – managed peer worktree (branch: feature/some-feature, clean)
-#   unmanaged/    – unmanaged worktree (detached HEAD, DIRTY – staged change)
+#   main/         – main worktree (branch: main, DIRTY – unstaged change); holds
+#                   the managed worktree under main/.claude/worktrees/feature
+#                   (branch: feature/some-feature, clean)
+#   unmanaged/    – foreign worktree (detached HEAD, DIRTY – staged change)
 
 set -euo pipefail
 
@@ -29,11 +30,11 @@ git -c user.email="clc@test" -c user.name="clc-test" -c commit.gpgsign=false \
 # Branch for the managed peer worktree
 git branch feature/some-feature
 
-# ── Managed peer worktree ─────────────────────────────────────────────────────
+# ── Managed worktree (nested under .claude/worktrees/) ────────────────────────
 
-git worktree add -q "${CASE_DIR}/main-feature" feature/some-feature
+git worktree add -q "${CASE_DIR}/main/.claude/worktrees/feature" feature/some-feature
 
-# ── Unmanaged worktree (detached HEAD) ───────────────────────────────────────
+# ── Foreign worktree (detached HEAD, top-level sibling) ───────────────────────
 
 git worktree add -q --detach "${CASE_DIR}/unmanaged"
 
@@ -46,5 +47,5 @@ echo "dirty content" >> "${CASE_DIR}/main/README.md"
 echo "new file" > "${CASE_DIR}/unmanaged/staged.txt"
 git -C "${CASE_DIR}/unmanaged" add staged.txt
 
-# main-feature: left clean
+# managed feature worktree: left clean
 

@@ -1,0 +1,11 @@
+Create worktree on new branch 'spike'? [y/N] 
+Created (spike)
+  %%PARENT_DIR%%/main/.claude/worktrees/spike
+
+(no saved state — run 'clc save' to save Claude files first)
+
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main   (main)
+  2   spike  (spike)

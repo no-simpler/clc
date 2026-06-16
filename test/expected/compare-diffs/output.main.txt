@@ -1,8 +1,4 @@
 Repository (parent dir: %%PARENT_DIR%%)
-  * main  (main)
 
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>
+Worktrees
+  1 * main  (main)

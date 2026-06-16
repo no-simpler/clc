@@ -1,0 +1,2 @@
+Create worktree on new branch 'spike'? [y/N] 
+Cancelled.

@@ -4,17 +4,13 @@ Enrolled
   brain: 2 Claude file(s) → store
 
 Repository (parent dir: %%PARENT_DIR%%)
-  * main  (main)
 
 Enrollment
   enrolled
   hooks: post-commit, post-merge, post-checkout
 
-Managed worktrees
-  <none>
-
-Unmanaged worktrees
-  <none>
+Worktrees
+  1 * main  (main)
 
 .git/info/exclude:
 # git ls-files --others --exclude-from=.git/info/exclude
