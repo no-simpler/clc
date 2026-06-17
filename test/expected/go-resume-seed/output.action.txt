@@ -1,0 +1,2 @@
+baseline before resume? no
+baseline after resume?  yes

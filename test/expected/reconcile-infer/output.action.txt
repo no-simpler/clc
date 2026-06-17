@@ -1,0 +1,12 @@
+reconcile from the baseline-less peer (CLAUDE.md → inferred ahead; settings.json → diverged):
+Reconcile
+  current worktree ↔ store
+    ↑ CLAUDE.md (ahead — inferred, no baseline)
+    ✗ .claude/settings.json (diverged — both changed)
+    (no baseline — direction inferred from main; a resolve records one)
+  main worktree ↔ store
+    ↑ .claude/settings.json (ahead — local edit not in store)
+
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore

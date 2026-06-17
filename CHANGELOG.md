@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-06-17
+
+A reconciliation-quality release. `clc reconcile` now reads correctly for worktrees clc didn't create itself (legacy worktrees, or ones made by `claude --worktree`): instead of conservatively flagging every local edit as a conflict, it tells *ahead* from *diverged* and resolves the safe cases on demand. Your store, enrollment, and backups are unchanged.
+
+### Fixed
+- **`clc reconcile` no longer mislabels a worktree-only edit as "diverged".** A worktree without a recorded baseline (created by an older clc, or directly by `claude --worktree`) previously had every local brain edit shown as `diverged — both changed`, even when only the worktree had moved. clc now infers direction from the trunk: a file whose stored copy still matches the main worktree's is shown as `ahead — inferred, no baseline` (resolve it with `clc reconcile --apply` or `clc save`), and only genuinely contested files (where the store and main disagree) stay `diverged`.
+
+### Added
+- **Self-healing baselines.** The first time `clc go` resumes — or a git hook observes — a baseline-less worktree whose brain already matches the store, clc records its baseline automatically. Worktrees made outside clc now pick up direction-aware reconciliation on their own, so the "no baseline" case stops arising for everyday work.
+- **`clc --help` now lists the files clc creates and where they live** — the per-worktree baseline, the per-repo gitignore/hook entries, and the per-machine config/store/state directories — so it's clear what clc tracks on your behalf and nothing feels hidden.
+
+### Changed
+- **Silent auto-promotion still requires a real baseline.** An inferred-ahead worktree (no baseline) is never promoted silently by a commit hook — it could be a stale checkout — so the hook only nudges; you promote it deliberately with `clc reconcile --apply` or `clc save`.
+
 ## [3.2.0] - 2026-06-17
 
 A quality-of-life release: every brain action can now target **any** worktree by name, number, branch, or unique prefix — the same `<selector>` you already use with `clc go` — so you no longer have to `cd` into a worktree to inspect or reconcile its second brain. Nothing changes when you omit the selector.
@@ -239,7 +253,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/no-simpler/clc/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/no-simpler/clc/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/no-simpler/clc/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/no-simpler/clc/compare/v3.0.0...v3.0.1

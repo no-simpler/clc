@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="3.2.0"
+CLC_VERSION="3.3.0"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
@@ -931,10 +931,11 @@ _CL_UNKNOWN=0   # 1 when no baseline was available (differences treated as confl
 # Classify each brain file of <wt> against the store mirror <save_dir> using the
 # 3-way baseline <baseline_sha> (may be empty → UNKNOWN). <rel> is the project's
 # store subtree path (HOME-relative main worktree), used to resolve baseline blobs.
+# <main_wt> (optional) lets the no-baseline branch infer direction from the trunk.
 # Reuses _compare_claude_files for the boundary-pruned enumeration, then refines
 # the non-SAME files by direction.
 _classify_brain() {
-    local wt="$1" save_dir="$2" baseline_sha="$3" rel="$4"
+    local wt="$1" save_dir="$2" baseline_sha="$3" rel="$4" main_wt="${5:-}"
     _CL_SAME=(); _CL_BEHIND=(); _CL_AHEAD=(); _CL_DIVERGED=(); _CL_UNKNOWN=0
     _CL_REL="${rel}"
 
@@ -943,13 +944,23 @@ _classify_brain() {
     for f in ${_CMP_SAME[@]+"${_CMP_SAME[@]}"}; do _CL_SAME+=("${f}"); done
 
     # No baseline (UNKNOWN): a store-only file is always a safe addition (treat as
-    # behind — restore simply adds it); a worktree-present difference can't be proven
-    # stale, so treat it as diverged (never auto-clobbered).
+    # behind — restore simply adds it). A worktree-present difference can't be proven
+    # stale, but when the store copy still equals main's (an uncontested trunk) the
+    # divergence can only be a local edit → infer AHEAD; otherwise stay conservative
+    # and treat it as diverged (never auto-clobbered). UNKNOWN stays set throughout,
+    # so callers know the direction is inferred, not baseline-proven (silent hook
+    # auto-promote remains gated on a real baseline).
     if [[ -z "${baseline_sha}" ]]; then
         _CL_UNKNOWN=1
         for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _CL_BEHIND+=("${f}"); done
         for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"} \
-                 ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _CL_DIVERGED+=("${f}"); done
+                 ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
+            if [[ -n "${main_wt}" ]] && _files_eq "${save_dir}/${f}" "${main_wt}/${f}"; then
+                _CL_AHEAD+=("${f}")
+            else
+                _CL_DIVERGED+=("${f}")
+            fi
+        done
         return 0
     fi
 
@@ -1021,6 +1032,16 @@ _maybe_advance_baseline() {
     return 0   # best-effort: a still-out-of-sync worktree must not trip set -e
 }
 
+# Self-heal: record a baseline the first time a worktree is observed fully in sync
+# with the store and has none recorded. Worktrees created outside clc (older clc, or
+# `claude --worktree`) start with no baseline; seeding it the moment they agree with
+# the store lets later edits classify as ahead instead of conservatively diverged.
+# A no-op when a baseline already exists (never re-stamps) or when not in sync.
+baseline_seed_if_synced() {
+    baseline_read "$1" >/dev/null 2>&1 && return 0
+    _maybe_advance_baseline "$1" "$2"
+}
+
 # Promote a list of worktree brain files into the store as one commit, then mirror
 # them into the main worktree (so main's own mirror-sync keeps them). Echoes the
 # number of files whose promotion actually changed the store. MUST run under
@@ -1050,10 +1071,14 @@ _print_classified() {
             printf "    ↓ %s ${CLR_MUTED}(behind — store is newer)${CLR_RESET}\n" "${f}"
         fi
     done
-    for f in ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"};    do printf "    ↑ %s ${CLR_MUTED}(ahead — local edit not in store)${CLR_RESET}\n" "${f}"; done
+    # With no baseline the direction is inferred from the trunk (store == main), not
+    # baseline-proven, so label ahead files "inferred" to set the right expectation.
+    local ahead_note="ahead — local edit not in store"
+    [[ ${_CL_UNKNOWN} -eq 1 ]] && ahead_note="ahead — inferred, no baseline"
+    for f in ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"};    do printf "    ↑ %s ${CLR_MUTED}(%s)${CLR_RESET}\n" "${f}" "${ahead_note}"; done
     for f in ${_CL_DIVERGED[@]+"${_CL_DIVERGED[@]}"}; do printf "    ${CLR_WARN}✗ %s${CLR_RESET} ${CLR_MUTED}(diverged — both changed)${CLR_RESET}\n" "${f}"; done
-    [[ ${_CL_UNKNOWN} -eq 1 && ${#_CL_DIVERGED[@]} -gt 0 ]] \
-        && echo "    ${CLR_MUTED}(no baseline recorded — local edits shown as diverged)${CLR_RESET}"
+    [[ ${_CL_UNKNOWN} -eq 1 && $(( ${#_CL_AHEAD[@]} + ${#_CL_DIVERGED[@]} )) -gt 0 ]] \
+        && echo "    ${CLR_MUTED}(no baseline — direction inferred from main; a resolve records one)${CLR_RESET}"
     return 0
 }
 
@@ -1063,8 +1088,8 @@ _print_classified() {
 # a pure fast-forward (only behind/additions) is applied as a clean update.
 # Returns 1 if the user aborts; 0 on success.
 _apply_restore() {
-    local wt="$1" save_dir="$2" baseline_sha="$3" rel="$4" opt_yes="${5:-0}"
-    _classify_brain "${wt}" "${save_dir}" "${baseline_sha}" "${rel}"
+    local wt="$1" save_dir="$2" baseline_sha="$3" rel="$4" opt_yes="${5:-0}" main_wt="${6:-}"
+    _classify_brain "${wt}" "${save_dir}" "${baseline_sha}" "${rel}" "${main_wt}"
 
     print_header "Restore"
     _print_classified "store → worktree"
@@ -1228,7 +1253,7 @@ cmd_diff_all() {
         printf "\n%s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
         if [[ ${opt_stat} -eq 1 ]]; then
             _classify_brain "${localpath}" "${save_dir}" \
-                "$(baseline_read "${localpath}" 2>/dev/null || true)" "${rel}"
+                "$(baseline_read "${localpath}" 2>/dev/null || true)" "${rel}" "${localpath}"
             _print_diff_stat
             continue
         fi
@@ -1276,7 +1301,7 @@ cmd_restore_all() {
             continue
         fi
         printf "\n%s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
-        _apply_restore "${localpath}" "${save_dir}" "$(baseline_read "${localpath}" 2>/dev/null || true)" "${rel}" "${opt_yes}" || true
+        _apply_restore "${localpath}" "${save_dir}" "$(baseline_read "${localpath}" 2>/dev/null || true)" "${rel}" "${opt_yes}" "${localpath}" || true
     done
 
     [[ ${any} -eq 0 ]] && echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
@@ -1359,7 +1384,7 @@ cmd_diff() {
     if [[ ${opt_stat} -eq 1 ]]; then
         print_header "Diff"
         _classify_brain "${target}" "${save_dir}" \
-            "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}"
+            "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}" "${main_worktree}"
         _print_diff_stat
         return 1
     fi
@@ -1410,7 +1435,7 @@ cmd_restore() {
     fi
 
     _apply_restore "${target}" "${save_dir}" \
-        "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}" "${opt_yes}"
+        "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}" "${opt_yes}" "${main_worktree}"
 }
 
 # Resolve the current worktree's brain divergence by direction (using the _CL_*
@@ -1502,7 +1527,7 @@ cmd_reconcile() {
         tgt_label="current worktree"
     fi
     _classify_brain "${target}" "${save_dir}" \
-        "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}"
+        "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}" "${main_worktree}"
     _print_classified "${tgt_label} ↔ store"
 
     if [[ ${opt_apply} -eq 1 ]]; then
@@ -1513,7 +1538,7 @@ cmd_reconcile() {
     # Read-only: for a peer, also show the main↔store context row, then hint.
     if [[ "${target}" != "${main_worktree}" ]]; then
         _classify_brain "${main_worktree}" "${save_dir}" \
-            "$(baseline_read "${main_worktree}" 2>/dev/null || true)" "${rel}"
+            "$(baseline_read "${main_worktree}" 2>/dev/null || true)" "${rel}" "${main_worktree}"
         _print_classified "main worktree ↔ store"
     fi
     echo
@@ -1539,7 +1564,7 @@ _restore_brain_into() {
             echo
         else
             _apply_restore "${wt}" "${save_dir}" \
-                "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}" 0 || true
+                "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}" 0 "${main_worktree}" || true
             echo
         fi
     else
@@ -1556,9 +1581,11 @@ _go_resume_refresh() {
     [[ "${wt}" == "${main_wt}" ]] && return 0
     local save_dir; save_dir=$(store_mirror_dir "${main_wt}" 2>/dev/null) || return 0
     local rel="${main_wt#${HOME}/}"
-    _classify_brain "${wt}" "${save_dir}" "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}"
+    _classify_brain "${wt}" "${save_dir}" "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}" "${main_wt}"
     local behind=${#_CL_BEHIND[@]} ahead=${#_CL_AHEAD[@]} diverged=${#_CL_DIVERGED[@]}
-    if [[ ${behind} -gt 0 && ${ahead} -eq 0 && ${diverged} -eq 0 ]]; then
+    if [[ ${behind} -eq 0 && ${ahead} -eq 0 && ${diverged} -eq 0 ]]; then
+        baseline_seed_if_synced "${wt}" "${save_dir}"   # heal a baseline-less worktree
+    elif [[ ${behind} -gt 0 && ${ahead} -eq 0 && ${diverged} -eq 0 ]]; then
         local f
         for f in "${_CL_BEHIND[@]}"; do _wt_take_file "${save_dir}" "${wt}" "${f}"; done
         _maybe_advance_baseline "${wt}" "${save_dir}"
@@ -2812,9 +2839,19 @@ _peer_brain_diverges() {
 _hook_peer_autosync() {
     local rel="$1" main_wt="$2" wt="$3" save_dir="$4"
     local name; name=$(basename "${wt}")
-    _classify_brain "${wt}" "${save_dir}" "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}"
+    _classify_brain "${wt}" "${save_dir}" "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}" "${main_wt}"
 
-    if [[ ${#_CL_DIVERGED[@]} -eq 0 && ${#_CL_BEHIND[@]} -eq 0 && ${#_CL_AHEAD[@]} -gt 0 ]]; then
+    # Heal a baseline-less peer the first time it is observed in sync (fresh
+    # `claude --worktree` brain still == store), so later edits classify directionally.
+    if [[ ${#_CL_DIVERGED[@]} -eq 0 && ${#_CL_BEHIND[@]} -eq 0 && ${#_CL_AHEAD[@]} -eq 0 ]]; then
+        baseline_seed_if_synced "${wt}" "${save_dir}"
+        return 0
+    fi
+
+    # Silent auto-promote is gated on a REAL baseline (_CL_UNKNOWN -eq 0): inferred
+    # ahead (no baseline) could be a stale peer, so it only nudges and resolves on an
+    # explicit `clc reconcile --apply` / `clc save`, never silently in a commit hook.
+    if [[ ${_CL_UNKNOWN} -eq 0 && ${#_CL_DIVERGED[@]} -eq 0 && ${#_CL_BEHIND[@]} -eq 0 && ${#_CL_AHEAD[@]} -gt 0 ]]; then
         local f contested=0
         for f in "${_CL_AHEAD[@]}"; do
             _files_eq "${main_wt}/${f}" "${save_dir}/${f}" || { contested=1; break; }
@@ -3358,6 +3395,17 @@ ${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
   ${CLR_BOLD}migrate${CLR_RESET}                One-shot v1→v2: discover repos from the legacy
                          ~/.clc/saved store and enroll the clc-touched ones.
                          ${CLR_MUTED}Idempotent; pre-v2 snapshot history is not replayed.${CLR_RESET}
+
+${CLR_BOLD}Files clc creates (never committed to your repo):${CLR_RESET}
+  ${CLR_BOLD}per-worktree${CLR_RESET}  ${CLR_MUTED}<gitdir>/clc-brain-baseline${CLR_RESET} — the store commit this worktree
+                last agreed with (drives behind/ahead/diverged). Main worktree
+                ${CLR_MUTED}.git/${CLR_RESET}; a peer ${CLR_MUTED}.git/worktrees/<name>/${CLR_RESET}.
+  ${CLR_BOLD}per-repo${CLR_RESET}      ${CLR_MUTED}<gitdir>/info/exclude${CLR_RESET} (the ignore patterns) and
+                ${CLR_MUTED}<gitdir>/hooks/post-{commit,merge,checkout}${CLR_RESET} (sentinel-wrapped
+                sync shims; honors core.hooksPath).
+  ${CLR_BOLD}per-machine${CLR_RESET}   ${CLR_MUTED}~/.config/clc/config${CLR_RESET} (backups), ${CLR_MUTED}~/.local/share/clc/store${CLR_RESET}
+                (central brain store + ${CLR_MUTED}.clc/registry${CLR_RESET}), ${CLR_MUTED}~/.local/state/clc${CLR_RESET}
+                (locks, backup + nudge stamps). ${CLR_MUTED}Respects XDG_*_HOME / CLC_STORE.${CLR_RESET}
 
 ${CLR_BOLD}Flags:${CLR_RESET}
   ${CLR_BOLD}-k, --keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune, close)${CLR_RESET} Keep the worktree's git branch
