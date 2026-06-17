@@ -1,0 +1,34 @@
+1. promote the peer with -y (fork resolved in the peer's favour):
+Promote (feat → store + main)
+    ↑ CLAUDE.md
+    ↑ .claude/settings.json
+
+  Promoted 2 brain file(s) → store + main.
+
+2. store after promote (both files = peer's content):
+   CLAUDE.md:     # peer edit
+   settings.json: {"peer":2}
+
+3. main after promote (both files = peer's content):
+   CLAUDE.md:     # peer edit
+   settings.json: {"peer":2}
+
+4. reconcile from main — in sync:
+Reconcile
+  main worktree ↔ store
+    in sync
+
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore
+
+5. reconcile from the peer — in sync:
+Reconcile
+  current worktree ↔ store
+    in sync
+  main worktree ↔ store
+    in sync
+
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore

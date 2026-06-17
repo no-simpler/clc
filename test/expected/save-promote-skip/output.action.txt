@@ -1,0 +1,12 @@
+1. promote the peer, answering 'n' to the fork prompt:
+
+  Files main also changed:
+    ✗ .claude/settings.json  overwrite main with this worktree's copy? [y/N] Promote (feat → store + main)
+    ↑ CLAUDE.md
+
+  Promoted 1 brain file(s) → store + main.
+    - .claude/settings.json (skipped — kept main's copy)
+
+2. main keeps its own settings.json (fork was skipped):
+   settings.json: {"main":1}
+   CLAUDE.md:     # peer edit

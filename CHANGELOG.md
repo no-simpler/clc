@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-06-17
+
+A consistency fix for `clc save <selector>`. Promoting another worktree's brain now lands in **both** the store and the main worktree — the canonical trunk — instead of the store alone, so a promotion no longer leaves main looking diverged from the store afterwards. Enrollment, backups, and `clc save` of the main worktree are unchanged.
+
+### Fixed
+- **`clc save <peer>` now promotes into the store *and* main, not the store alone.** Previously, saving another worktree's brain by selector bulk-mirrored the *entire* peer brain into the store (and could overwrite files main was actually ahead on) while never touching main — so immediately afterward `clc reconcile` reported main as `diverged — both changed`, the exact mess a deliberate promotion was meant to avoid. A peer save is now a real promotion: it updates the store and the main worktree together and records baselines for both, so all three agree when it finishes.
+- **The misdirected nudge on `clc save <peer>` is gone.** Running `clc save <selector>` no longer prints the confusing *"…main is canonical; run 'clc save' here…"* warning (which told you to run the command you were already running). You now get a clear summary of exactly which files were promoted.
+
+### Added
+- **Tiered, safe-by-default promotion for `clc save <peer>`.** Clean edits — files only the peer changed — are promoted automatically with no prompt. A file that **both** the peer and main changed (a genuine fork) prompts `overwrite main with this worktree's copy? [y/N]` per file; answer `n` to keep main's copy. Pass `-y`/`--yes` to accept all forks non-interactively. Files the peer is merely behind on are left untouched (use `clc restore` to take them), and the summary tells you when any exist.
+
 ## [3.3.0] - 2026-06-17
 
 A reconciliation-quality release. `clc reconcile` now reads correctly for worktrees clc didn't create itself (legacy worktrees, or ones made by `claude --worktree`): instead of conservatively flagging every local edit as a conflict, it tells *ahead* from *diverged* and resolves the safe cases on demand. Your store, enrollment, and backups are unchanged.
@@ -253,7 +264,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v3.3.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v3.4.0...HEAD
+[3.4.0]: https://github.com/no-simpler/clc/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/no-simpler/clc/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/no-simpler/clc/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/no-simpler/clc/compare/v3.0.1...v3.1.0

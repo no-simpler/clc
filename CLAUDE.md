@@ -21,7 +21,7 @@ The goal is to enable user to work with Claude Code effectively and efficiently 
   - `/.claude/` directory (only in the root of worktree) with all contents.
 - Manages Claude-related files (the "second brain") per worktree.
   - Allows ignoring these files locally (via `.git/info/exclude`).
-  - **Enrollment** (`enroll`) fully manages a repo; `save`/`compare`/`restore` operate against the central git store; `ignore`/`unignore` are the gitignore-only step.
+  - **Enrollment** (`enroll`) fully manages a repo; `save`/`compare`/`restore` operate against the central git store; `ignore`/`unignore` are the gitignore-only step. A `save` of the **main** worktree is a full canonical mirror (main → store, delete-aware); a `save` of a **peer** worktree (by selector) is a *promotion* that lands in store **and** main together (the canonical trunk) via `_promote_files` — clean edits auto-promote, files main also changed prompt y/N (`-y` accepts all), behind files are left for `restore`. Writing the store alone would strand main diverged (a v3 field bug).
 
 ## Mission (the two-slice model)
 

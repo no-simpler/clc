@@ -2,10 +2,23 @@
 <project>/CLAUDE.md
 
 2. save the peer by selector, from main:
-clc: 'feat' brain differs from the store — main is canonical; run 'clc save' here to promote these edits or 'clc restore' to take the stored brain
-Synced
-  2 Claude file(s) → store
+Promote (feat → store + main)
+    ↑ .claude/peer-only.json
+
+  Promoted 1 brain file(s) → store + main.
 
 3. store after save (peer-only.json promoted):
 <project>/.claude/peer-only.json
 <project>/CLAUDE.md
+
+4. main worktree after save (peer-only.json promoted into main too):
+.claude/peer-only.json
+
+5. reconcile from main — store and main agree, no divergence:
+Reconcile
+  main worktree ↔ store
+    in sync
+
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore

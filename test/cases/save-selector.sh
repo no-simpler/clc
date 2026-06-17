@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# save-selector.sh – `clc save <selector>` promotes another worktree's brain into the
-# store from the call site. Run from the MAIN worktree, `clc save feat` syncs the
-# *peer's* brain (not main's). As with any peer save, a "main is canonical" nudge
-# goes to stderr.
+# save-selector.sh – `clc save <selector>` promotes a peer worktree's brain into the
+# store AND main (the canonical trunk) from the call site. Run from the MAIN worktree,
+# `clc save feat` promotes the *peer's* edits: a clean (uncontested) edit auto-promotes
+# with no prompt.
 #
-# Asserts the peer-only file lands in the store after `clc save feat` from main.
+# Asserts the peer-only file lands in BOTH the store and main after `clc save feat`,
+# and that reconcile then reports no divergence.
 
 set -euo pipefail
 
@@ -53,3 +54,11 @@ echo "2. save the peer by selector, from main:"
 echo
 echo "3. store after save (peer-only.json promoted):"
 git -C "${STORE}" ls-files -- "${PREFIX}" | sed "s|^${PREFIX}/|<project>/|"
+
+echo
+echo "4. main worktree after save (peer-only.json promoted into main too):"
+( cd "${CASE_DIR}/main" && ls .claude/peer-only.json 2>&1 )
+
+echo
+echo "5. reconcile from main — store and main agree, no divergence:"
+(cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color reconcile)

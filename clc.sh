@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="3.3.0"
+CLC_VERSION="3.4.0"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
@@ -1486,6 +1486,91 @@ _reconcile_apply() {
     return 0
 }
 
+# `clc save <peer>` — the DELIBERATE worktree→canonical promotion (directional push).
+# The store mirrors MAIN (the canonical trunk), so a peer's edits must land in
+# store + main together; writing the store alone would leave main diverged (the v3
+# field bug). Classifies the peer against the store (direction inferred from main
+# when no baseline) and, following the system's tiered automation:
+#   • ahead + uncontested (main's copy == store's) → auto-promote (safe, no prompt)
+#   • genuine forks (diverged, or ahead-but-main-also-moved) → prompt y/N per file
+#     (promote-local or skip); -y accepts all. No a/b/c "take store" — that is what
+#     `restore` is for; save only pushes.
+#   • behind files → left for `restore` (noted, not pulled).
+# Promotions go through _promote_files (store commit + main mirror); baselines for
+# the peer AND main advance only when each tree is fully back in sync.
+_save_promote() {
+    local wt="$1" rel="$2" main_wt="$3" opt_yes="$4"
+    local name; name=$(basename "${wt}")
+
+    # Seed the store from main if it holds no mirror yet (first brain), so there is a
+    # canonical state to promote against.
+    local save_dir
+    if ! save_dir=$(store_mirror_dir "${main_wt}" 2>/dev/null); then
+        with_store_lock store_sync_project "${rel}" "${main_wt}" 0 >/dev/null 2>&1 || true
+        baseline_advance "${main_wt}" 2>/dev/null || true
+        save_dir=$(store_mirror_dir "${main_wt}" 2>/dev/null) \
+            || die "no stored brain found — run 'clc save' from the main worktree first"
+    fi
+
+    _classify_brain "${wt}" "${save_dir}" \
+        "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}" "${main_wt}"
+
+    # Partition ahead files into uncontested (auto) and contested (fork); forks also
+    # include every diverged file.
+    local -a promote=() forks=() skipped=()
+    local f
+    for f in ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"}; do
+        if _files_eq "${main_wt}/${f}" "${save_dir}/${f}"; then
+            promote+=("${f}")
+        else
+            forks+=("${f}")
+        fi
+    done
+    forks+=( ${_CL_DIVERGED[@]+"${_CL_DIVERGED[@]}"} )
+
+    if [[ ${#forks[@]} -gt 0 ]]; then
+        if [[ ${opt_yes} -eq 1 ]]; then
+            promote+=( "${forks[@]}" )
+        else
+            echo
+            echo "  ${CLR_BOLD}Files main also changed:${CLR_RESET}"
+            for f in "${forks[@]}"; do
+                local ans=""
+                printf "    ✗ %s  overwrite main with this worktree's copy? [y/N] " "${f}"
+                read -r ans || ans=""
+                case "${ans}" in
+                    y|Y) promote+=("${f}") ;;
+                    *)   skipped+=("${f}") ;;
+                esac
+            done
+        fi
+    fi
+
+    if [[ ${#promote[@]} -gt 0 ]]; then
+        with_store_lock _promote_files "${rel}" "${wt}" "${main_wt}" "${promote[@]}" >/dev/null
+    fi
+
+    # Advance baselines only when each tree is now fully in sync with the store.
+    _maybe_advance_baseline "${wt}" "${save_dir}"
+    _maybe_advance_baseline "${main_wt}" "${save_dir}"
+
+    print_header "Promote (${name} → store + main)"
+    if [[ ${#promote[@]} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing to promote — store already matches this worktree)${CLR_RESET}"
+    else
+        for f in "${promote[@]}"; do printf "    ↑ %s\n" "${f}"; done
+        echo
+        echo "  Promoted ${#promote[@]} brain file(s) → store + main."
+    fi
+    for f in ${skipped[@]+"${skipped[@]}"}; do
+        printf "    ${CLR_MUTED}- %s (skipped — kept main's copy)${CLR_RESET}\n" "${f}"
+    done
+    [[ ${#_CL_BEHIND[@]} -gt 0 ]] \
+        && echo "  ${CLR_MUTED}${#_CL_BEHIND[@]} file(s) behind the store — run 'clc restore' to take them.${CLR_RESET}"
+    [[ ${#promote[@]} -gt 0 ]] && maybe_trigger_backup
+    return 0
+}
+
 # `clc reconcile [--apply] [-y]` — direction-aware 3-way view of the second brain
 # across the current worktree, the central store, and the main worktree. Read-only
 # by default (behind/ahead/diverged labels); with --apply it resolves from one
@@ -2804,29 +2889,6 @@ _fsck_remove() {
 
 # ── v2 sync command (hidden/experimental) ─────────────────────────────────────
 
-# Emit the single non-alarming peer-divergence warning to STDERR. Surfaces through
-# the git hook's output even when --from-hook suppresses stdout. No absolute paths —
-# only the peer worktree's basename — so it stays deterministic. The store mirrors
-# the MAIN worktree (canonical); a peer's diverging brain is NOT auto-synced, so
-# this nudges the user to reconcile deliberately.
-warn_peer_source() {
-    local current_worktree="$1"
-    local name; name=$(basename "${current_worktree}")
-    printf '%sclc: '\''%s'\'' brain differs from the store — main is canonical; run '\''clc save'\'' here to promote these edits or '\''clc restore'\'' to take the stored brain%s\n' \
-        "${CLR_WARN}" "${name}" "${CLR_RESET}" >&2
-}
-
-# Return 0 if the current worktree's brain differs from the stored (canonical)
-# state — used to gate the peer-divergence warning so an in-sync peer commit stays
-# silent. Fail-safe: any error (e.g. no stored state) is treated as "no divergence".
-_peer_brain_diverges() {
-    local main_worktree="$1" current_worktree="$2"
-    local save_dir; save_dir=$(store_mirror_dir "${main_worktree}") || return 1
-    _compare_claude_files "${current_worktree}" "${save_dir}" || return 1
-    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
-    [[ ${diffs} -gt 0 ]]
-}
-
 # Peer-commit auto-reconcile (from a git hook). Classifies the peer's brain against
 # the store and acts only when provably safe:
 #  • PURELY ahead + uncontested by main → auto-promote into store + main (notice).
@@ -2903,12 +2965,13 @@ cmd_sync_all() {
 cmd_sync() {
     # --from-hook: run silently + fail-safe (git-hook context must not pollute the
     # user's commit output). The peer-divergence warning still goes to stderr.
-    local from_hook=0 opt_all=0 opt_force_empty=0 selector=""
+    local from_hook=0 opt_all=0 opt_force_empty=0 opt_yes=0 selector=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from-hook)   from_hook=1 ;;
             -a|--all)      opt_all=1 ;;
             --force-empty) opt_force_empty=1 ;;
+            -y|--yes)      opt_yes=1 ;;
             -*) die "unknown option for 'sync': $1" ;;
             *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
         esac
@@ -2972,14 +3035,19 @@ cmd_sync() {
     local rel="${main_worktree#${HOME}/}"
     [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
 
-    # Interactive `save` is the DELIBERATE worktree→store promotion path: it syncs
-    # the target worktree's brain (not main's), so a user can push edits made
-    # inside a peer worktree. Nudge (to stderr) that main is canonical.
-    [[ "${target}" != "${main_worktree}" ]] \
-        && _peer_brain_diverges "${main_worktree}" "${target}" 2>/dev/null \
-        && warn_peer_source "${target}"
-
     store_init
+
+    # A peer save is the DELIBERATE worktree→canonical promotion path. The store
+    # mirrors MAIN (the canonical trunk), so promoting a peer's edits must land in
+    # store + main together — not the store alone (that would leave main diverged).
+    # Route it through the same _promote_files machinery the hook/reconcile use.
+    if [[ "${target}" != "${main_worktree}" ]]; then
+        _save_promote "${target}" "${rel}" "${main_worktree}" "${opt_yes}"
+        return 0
+    fi
+
+    # MAIN save: full canonical mirror (delete-aware), guarded against erasing a
+    # populated store from an empty brain.
     with_store_lock store_sync_project "${rel}" "${target}" "${opt_force_empty}"
 
     if [[ "${_STORE_SYNC_RESULT}" == "guarded" ]]; then
@@ -3314,12 +3382,14 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          ${CLR_MUTED}(gitignore-only; the standalone step within enroll)${CLR_RESET}
   ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
                          ${CLR_MUTED}(gitignore-only)${CLR_RESET}
-  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all] [--force-empty] [<selector>]${CLR_RESET}
+  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all] [-y|--yes] [--force-empty] [<selector>]${CLR_RESET}
                          Sync Claude files from the current worktree into the
                          central store. ${CLR_MUTED}Refuses to erase a populated store from
                          an empty worktree brain unless --force-empty is given.
-                         With <selector>, save another worktree's brain. With --all,
-                         snapshot every enrolled repo (runnable from anywhere).${CLR_RESET}
+                         With a peer <selector>, promote that worktree's edits into
+                         the store AND main (the canonical trunk): clean edits go
+                         automatically; files main also changed prompt y/N (-y accepts
+                         all). With --all, snapshot every enrolled repo.${CLR_RESET}
   ${CLR_BOLD}compare${CLR_RESET} ${CLR_MUTED}[-a|--all] [<selector>]${CLR_RESET}
                          Compare current worktree against the stored state. ${CLR_MUTED}Exits 0
                          if in sync, 1 if differences exist. With <selector>, compare
