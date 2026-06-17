@@ -15,7 +15,7 @@ The goal is to enable user to work with Claude Code effectively and efficiently 
   - A **managed** worktree lives at `<main worktree>/.claude/worktrees/<name>` — the same path `claude --worktree` uses, so clc-created and Claude-Code-created worktrees are indistinguishable and equally managed.
   - A worktree anywhere else (a checkout outside that dir) is **foreign**: still listed and launchable, but never auto-removed by `rm`/`prune` (adopt it first with `clc name`).
   - The nested worktrees are kept out of the second brain by `_nested_git_boundaries` (they are separate projects); creating a worktree under `.claude/worktrees/` therefore assumes the brain is locally ignored (`clc enroll`/`ignore`), or the main tree shows it as untracked.
-  - `clc go` is the one-verb resume-or-create launcher; `clc name` renames a worktree's directory (and adopts a foreign one); `rm`/`prune`/`pull`/`close` operate on managed worktrees by **selector** (index/name/branch/unique-prefix).
+  - `clc go` is the one-verb resume-or-create launcher; `clc name` renames a worktree's directory (and adopts a foreign one); `rm`/`prune`/`pull`/`close` operate on managed worktrees by **selector** (index/name/branch/unique-prefix). The **brain** actions (`ls`/`save`/`compare`/`diff`/`restore`/`reconcile`) also take an optional trailing selector via `resolve_target_worktree` — resolution-only (never creates), defaulting to the current worktree when omitted, mutually exclusive with `--all`.
 - Defines **Claude-related files** as:
   - `CLAUDE.md` file (at any depth of worktree).
   - `/.claude/` directory (only in the root of worktree) with all contents.

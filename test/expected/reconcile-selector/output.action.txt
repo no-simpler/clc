@@ -1,0 +1,23 @@
+1. reconcile the peer by selector, from main (peer behind; main in sync):
+Reconcile
+  worktree feat ↔ store
+    ↓ .claude/settings.json (behind — store is newer)
+    ↓ CLAUDE.md (behind — store is newer)
+  main worktree ↔ store
+    in sync
+
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore
+
+2. reconcile --apply the peer by selector, from main:
+Reconcile
+  worktree feat ↔ store
+    ↓ .claude/settings.json (behind — store is newer)
+    ↓ CLAUDE.md (behind — store is newer)
+
+Applied
+  promoted 0 → store + main, took 2 from store
+
+3. peer brain after apply:
+   CLAUDE.md=# project instructions  settings={}

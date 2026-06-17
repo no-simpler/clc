@@ -1,0 +1,11 @@
+1. reconcile with a no-match selector:
+clc: error: no worktree matches 'bogus'
+   (exit 1)
+
+2. reconcile with an ambiguous prefix selector:
+clc: error: ambiguous selector 'feature' — matches more than one worktree
+   (exit 1)
+
+3. compare with --all and a selector together:
+clc: error: --all and a selector are mutually exclusive
+   (exit 1)

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-06-17
+
+A quality-of-life release: every brain action can now target **any** worktree by name, number, branch, or unique prefix — the same `<selector>` you already use with `clc go` — so you no longer have to `cd` into a worktree to inspect or reconcile its second brain. Nothing changes when you omit the selector.
+
+### Added
+- **`clc reconcile <selector>`** — reconcile another worktree's brain from where you are. Run `clc reconcile feature` from the main worktree to see (and, with `--apply`, resolve) the `feature` worktree's behind/ahead/diverged state against the store, without leaving your current directory.
+- **`<selector>` across the whole brain family.** `ls`, `save`, `compare`, `diff`, `restore`, and `reconcile` all now accept an optional trailing worktree selector (number, name, branch, or unique prefix — exactly as `clc go`). With no selector each behaves exactly as before (the current worktree); with one it targets that worktree. Like `rm`/`name`/`pull`/`close`, a selector that matches nothing is an error (it never creates a worktree). A selector and `--all` are mutually exclusive.
+
 ## [3.1.0] - 2026-06-17
 
 A reconciliation release. clc now understands the **direction** of every second-brain difference — whether a worktree is behind, ahead of, or genuinely diverged from the store — so it can do the safe thing automatically and ask only when there's a real conflict. Your store, enrollment, and backups are unchanged; existing worktrees pick up the new behavior on their next save/restore/`clc go`.
@@ -231,7 +239,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/no-simpler/clc/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/no-simpler/clc/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/no-simpler/clc/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/no-simpler/clc/compare/v2.1.2...v3.0.0

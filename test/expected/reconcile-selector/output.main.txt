@@ -1,0 +1,9 @@
+Repository (parent dir: %%PARENT_DIR%%)
+
+Enrollment
+  enrolled
+  hooks: post-commit, post-merge, post-checkout
+
+Worktrees
+  1 * main  (main)
+  2   feat  (feat)

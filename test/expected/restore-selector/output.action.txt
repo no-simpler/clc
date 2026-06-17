@@ -1,0 +1,9 @@
+1. peer brain before restore: CLAUDE.md=main1
+
+2. restore the peer by selector, from main (behind → clean fast-forward):
+Restore
+  store → worktree
+    ↓ CLAUDE.md (behind — store is newer)
+Clean update (1 file(s)).
+
+3. peer brain after restore: CLAUDE.md=main2

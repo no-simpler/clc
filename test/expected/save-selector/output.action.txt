@@ -1,0 +1,11 @@
+1. store before save (peer-only.json absent):
+<project>/CLAUDE.md
+
+2. save the peer by selector, from main:
+clc: 'feat' brain differs from the store — main is canonical; run 'clc save' here to promote these edits or 'clc restore' to take the stored brain
+Synced
+  2 Claude file(s) → store
+
+3. store after save (peer-only.json promoted):
+<project>/.claude/peer-only.json
+<project>/CLAUDE.md

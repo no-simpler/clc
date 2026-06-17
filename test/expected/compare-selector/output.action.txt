@@ -1,0 +1,13 @@
+1. compare the peer by selector, from main:
+Compare
+  Exists in storage only:
+    + .claude/settings.json
+  Different content:
+    ~ CLAUDE.md
+  Exists in worktree only:
+    - docs/CLAUDE.md
+
+Run 'clc save' to save current state; run 'clc restore' to load saved state.
+
+2. compare the (in-sync) main worktree by selector, from the peer:
+All 2 Claude file(s) in main worktree are in sync with storage.

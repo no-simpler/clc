@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="3.1.0"
+CLC_VERSION="3.2.0"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
@@ -627,6 +627,36 @@ resolve_worktree() {
     [[ ${nmatch} -eq 1 ]] && { printf '%s\n' "${rows[match]}"; return 0; }
     [[ ${nmatch} -gt 1 ]] && return 2
     return 1
+}
+
+# Resolve the target worktree for a per-worktree brain op. An empty selector means
+# the current worktree (today's default). Otherwise resolve via resolve_worktree and
+# die on miss/ambiguity — resolution-only, never creates a worktree (unlike `go`).
+# Echoes the absolute worktree path.
+resolve_target_worktree() {
+    local main_worktree="$1" selector="$2"
+    if [[ -z "${selector}" ]]; then
+        git_current_worktree || die "unable to determine current worktree"
+        return
+    fi
+    local row rc=0
+    row=$(resolve_worktree "${main_worktree}" "${selector}") || rc=$?
+    [[ ${rc} -eq 2 ]] && die "ambiguous selector '${selector}' — matches more than one worktree"
+    [[ ${rc} -eq 0 ]] || die "no worktree matches '${selector}'"
+    local type name path branch dirty
+    IFS=$'\002' read -r type name path branch dirty <<< "${row}"
+    printf '%s\n' "${path}"
+}
+
+# Human label for the brain-op target in messages. With no selector this echoes the
+# literal "current worktree" (byte-for-byte unchanged from the pre-selector output,
+# even when the current worktree happens to be main); a given selector distinguishes
+# the main worktree from a named one.
+_target_label() {
+    local target="$1" main_worktree="$2" selector="$3"
+    if   [[ -z "${selector}" ]];                  then echo "current worktree"
+    elif [[ "${target}" == "${main_worktree}" ]]; then echo "main worktree"
+    else echo "worktree $(basename "${target}")"; fi
 }
 
 # Human-friendly label for a worktree row: the name for main/managed; a
@@ -1254,34 +1284,34 @@ cmd_restore_all() {
 }
 
 cmd_compare() {
-    local opt_all=0
+    local opt_all=0 selector=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -a|--all) opt_all=1 ;;
             -*) die "unknown option for 'compare': $1" ;;
-            *)  die "unexpected argument: $1" ;;
+            *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
         esac
         shift
     done
+    [[ ${opt_all} -eq 1 && -n "${selector}" ]] && die "--all and a selector are mutually exclusive"
     [[ ${opt_all} -eq 1 ]] && { cmd_compare_all; return; }
 
-    local main_gitdir main_worktree current_worktree
+    local main_gitdir main_worktree target
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
                                          || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                         || die "unable to determine current worktree"
+    target=$(resolve_target_worktree "${main_worktree}" "${selector}")
 
     local save_dir
     save_dir=$(store_mirror_dir "${main_worktree}") \
         || die "no saved state found — run 'clc save' first"
 
-    _compare_claude_files "${current_worktree}" "${save_dir}"
+    _compare_claude_files "${target}" "${save_dir}"
     local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
     local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
 
     if [[ ${diffs} -eq 0 ]]; then
-        echo "All ${total} Claude file(s) in current worktree are in sync with storage."
+        echo "All ${total} Claude file(s) in $(_target_label "${target}" "${main_worktree}" "${selector}") are in sync with storage."
         return 0
     fi
 
@@ -1292,44 +1322,44 @@ cmd_compare() {
 }
 
 cmd_diff() {
-    local opt_all=0 opt_stat=0
+    local opt_all=0 opt_stat=0 selector=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -a|--all)  opt_all=1 ;;
             --stat)    opt_stat=1 ;;
             -*) die "unknown option for 'diff': $1" ;;
-            *)  die "unexpected argument: $1" ;;
+            *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
         esac
         shift
     done
+    [[ ${opt_all} -eq 1 && -n "${selector}" ]] && die "--all and a selector are mutually exclusive"
     [[ ${opt_all} -eq 1 ]] && { cmd_diff_all "${opt_stat}"; return; }
 
-    local main_gitdir main_worktree current_worktree
+    local main_gitdir main_worktree target
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
                                          || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                         || die "unable to determine current worktree"
+    target=$(resolve_target_worktree "${main_worktree}" "${selector}")
 
     local rel="${main_worktree#${HOME}/}"
     local save_dir
     save_dir=$(store_mirror_dir "${main_worktree}") \
         || die "no saved state found — run 'clc save' first"
 
-    _compare_claude_files "${current_worktree}" "${save_dir}"
+    _compare_claude_files "${target}" "${save_dir}"
     local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
     local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
 
     if [[ ${diffs} -eq 0 ]]; then
-        echo "All ${total} Claude file(s) in current worktree are in sync with storage."
+        echo "All ${total} Claude file(s) in $(_target_label "${target}" "${main_worktree}" "${selector}") are in sync with storage."
         return 0
     fi
 
     # --stat: directional one-line-per-file summary instead of full hunks.
     if [[ ${opt_stat} -eq 1 ]]; then
         print_header "Diff"
-        _classify_brain "${current_worktree}" "${save_dir}" \
-            "$(baseline_read "${current_worktree}" 2>/dev/null || true)" "${rel}"
+        _classify_brain "${target}" "${save_dir}" \
+            "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}"
         _print_diff_stat
         return 1
     fi
@@ -1338,49 +1368,49 @@ cmd_diff() {
     [[ "${OPT_NO_COLOR}" -eq 1 ]] && git_color=("--no-color")
 
     # Repo-relative deltas (paths stripped to project-relative; see _diff_one).
-    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _diff_one del "${save_dir}" "${current_worktree}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
-    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};      do _diff_one mod "${save_dir}" "${current_worktree}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
-    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _diff_one add "${save_dir}" "${current_worktree}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _diff_one del "${save_dir}" "${target}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};      do _diff_one mod "${save_dir}" "${target}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _diff_one add "${save_dir}" "${target}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
 
     return 1
 }
 
 cmd_restore() {
-    local opt_all=0 opt_yes=0
+    local opt_all=0 opt_yes=0 selector=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -a|--all) opt_all=1 ;;
             -y|--yes) opt_yes=1 ;;
             -*) die "unknown option for 'restore': $1" ;;
-            *)  die "unexpected argument: $1" ;;
+            *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
         esac
         shift
     done
+    [[ ${opt_all} -eq 1 && -n "${selector}" ]] && die "--all and a selector are mutually exclusive"
     [[ ${opt_all} -eq 1 ]] && { cmd_restore_all "${opt_yes}"; return; }
 
-    local main_gitdir main_worktree current_worktree
+    local main_gitdir main_worktree target
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
                                          || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                         || die "unable to determine current worktree"
+    target=$(resolve_target_worktree "${main_worktree}" "${selector}")
 
     local rel="${main_worktree#${HOME}/}"
     local save_dir
     save_dir=$(store_mirror_dir "${main_worktree}") \
         || die "no saved state found — run 'clc save' first"
 
-    _compare_claude_files "${current_worktree}" "${save_dir}"
+    _compare_claude_files "${target}" "${save_dir}"
     local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
     local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
 
     if [[ ${diffs} -eq 0 ]]; then
-        echo "All ${total} Claude file(s) in current worktree are in sync with storage."
+        echo "All ${total} Claude file(s) in $(_target_label "${target}" "${main_worktree}" "${selector}") are in sync with storage."
         return 0
     fi
 
-    _apply_restore "${current_worktree}" "${save_dir}" \
-        "$(baseline_read "${current_worktree}" 2>/dev/null || true)" "${rel}" "${opt_yes}"
+    _apply_restore "${target}" "${save_dir}" \
+        "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}" "${opt_yes}"
 }
 
 # Resolve the current worktree's brain divergence by direction (using the _CL_*
@@ -1437,23 +1467,22 @@ _reconcile_apply() {
 # place: auto fast-forward behind files (take store), auto promote ahead files
 # (store + main), and prompt a/b/c per diverged file (skipped under -y).
 cmd_reconcile() {
-    local opt_apply=0 opt_yes=0
+    local opt_apply=0 opt_yes=0 selector=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --apply)  opt_apply=1 ;;
             -y|--yes) opt_yes=1 ;;
             -*) die "unknown option for 'reconcile': $1" ;;
-            *)  die "unexpected argument: $1" ;;
+            *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
         esac
         shift
     done
 
-    local main_gitdir main_worktree current_worktree
+    local main_gitdir main_worktree target
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
                                          || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                         || die "unable to determine current worktree"
+    target=$(resolve_target_worktree "${main_worktree}" "${selector}")
 
     local rel="${main_worktree#${HOME}/}"
     local save_dir
@@ -1462,22 +1491,27 @@ cmd_reconcile() {
 
     print_header "Reconcile"
 
-    # Current worktree ↔ store (the actionable view).
-    _classify_brain "${current_worktree}" "${save_dir}" \
-        "$(baseline_read "${current_worktree}" 2>/dev/null || true)" "${rel}"
-    if [[ "${current_worktree}" == "${main_worktree}" ]]; then
-        _print_classified "main worktree ↔ store"
+    # Target worktree ↔ store (the actionable view). With no selector keep reconcile's
+    # original main-vs-current labelling; a selector distinguishes a named worktree.
+    local tgt_label
+    if [[ -n "${selector}" ]]; then
+        tgt_label="$(_target_label "${target}" "${main_worktree}" "${selector}")"
+    elif [[ "${target}" == "${main_worktree}" ]]; then
+        tgt_label="main worktree"
     else
-        _print_classified "current worktree ↔ store"
+        tgt_label="current worktree"
     fi
+    _classify_brain "${target}" "${save_dir}" \
+        "$(baseline_read "${target}" 2>/dev/null || true)" "${rel}"
+    _print_classified "${tgt_label} ↔ store"
 
     if [[ ${opt_apply} -eq 1 ]]; then
-        _reconcile_apply "${current_worktree}" "${save_dir}" "${rel}" "${main_worktree}" "${opt_yes}"
+        _reconcile_apply "${target}" "${save_dir}" "${rel}" "${main_worktree}" "${opt_yes}"
         return 0
     fi
 
     # Read-only: for a peer, also show the main↔store context row, then hint.
-    if [[ "${current_worktree}" != "${main_worktree}" ]]; then
+    if [[ "${target}" != "${main_worktree}" ]]; then
         _classify_brain "${main_worktree}" "${save_dir}" \
             "$(baseline_read "${main_worktree}" 2>/dev/null || true)" "${rel}"
         _print_classified "main worktree ↔ store"
@@ -1880,12 +1914,20 @@ cmd_unignore() {
 }
 
 cmd_ls() {
-    local main_gitdir main_worktree current_worktree
+    local selector=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) die "unknown option for 'ls': $1" ;;
+            *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
+        esac
+        shift
+    done
+
+    local main_gitdir main_worktree target
     main_gitdir=$(git_main_gitdir)    || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") \
                                       || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) \
-                                      || die "unable to determine current worktree"
+    target=$(resolve_target_worktree "${main_worktree}" "${selector}")
 
     # Show a transient "Searching..." prompt on TTY so the user knows work is happening.
     # Skipped when stdout is not a TTY (pipes, test capture) — output stays clean.
@@ -1894,12 +1936,12 @@ cmd_ls() {
     local -a items=()
 
     # .claude/ at worktree root
-    [[ -d "${current_worktree}/.claude" ]] && items+=(".claude/")
+    [[ -d "${target}/.claude" ]] && items+=(".claude/")
 
     # All CLAUDE.md files at any depth, sorted by path
     while IFS= read -r abs_path; do
-        items+=("${abs_path#${current_worktree}/}")
-    done < <(_find_claude_md_files "${current_worktree}")
+        items+=("${abs_path#${target}/}")
+    done < <(_find_claude_md_files "${target}")
 
     # Clear the "Searching..." line, then print the real header
     [[ -t 1 ]] && printf "\r\033[K"
@@ -1909,7 +1951,7 @@ cmd_ls() {
         echo "  ${CLR_MUTED}<none>${CLR_RESET}"
     else
         for rel in "${items[@]}"; do
-            if _claude_item_git_managed "${current_worktree}" "${rel}"; then
+            if _claude_item_git_managed "${target}" "${rel}"; then
                 printf "  %s!%s %s%s%s\n" "${CLR_WARN}" "${CLR_RESET}" "${CLR_WARN}" "${rel}" "${CLR_RESET}"
             else
                 printf "    %s  %s(properly ignored)%s\n" "${rel}" "${CLR_MUTED}" "${CLR_RESET}"
@@ -1923,7 +1965,7 @@ cmd_ls() {
     if [[ -z "${save_dir}" ]]; then
         echo "${CLR_MUTED}(no saved state — run 'clc save')${CLR_RESET}"
     else
-        _compare_claude_files "${current_worktree}" "${save_dir}"
+        _compare_claude_files "${target}" "${save_dir}"
         local total=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} + ${#_CMP_SAME[@]} ))
         local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
         if [[ ${diffs} -eq 0 ]]; then
@@ -2824,22 +2866,24 @@ cmd_sync_all() {
 cmd_sync() {
     # --from-hook: run silently + fail-safe (git-hook context must not pollute the
     # user's commit output). The peer-divergence warning still goes to stderr.
-    local from_hook=0 opt_all=0 opt_force_empty=0
+    local from_hook=0 opt_all=0 opt_force_empty=0 selector=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --from-hook)   from_hook=1 ;;
             -a|--all)      opt_all=1 ;;
             --force-empty) opt_force_empty=1 ;;
             -*) die "unknown option for 'sync': $1" ;;
-            *)  die "unexpected argument: $1" ;;
+            *)  [[ -z "${selector}" ]] || die "unexpected argument: $1"; selector="$1" ;;
         esac
         shift
     done
     [[ ${from_hook} -eq 1 && ${opt_all} -eq 1 ]] && die "--from-hook and --all are mutually exclusive"
     [[ ${from_hook} -eq 1 && ${opt_force_empty} -eq 1 ]] && die "--from-hook and --force-empty are mutually exclusive"
+    [[ ${from_hook} -eq 1 && -n "${selector}" ]] && die "--from-hook does not take a selector"
+    [[ ${opt_all} -eq 1 && -n "${selector}" ]] && die "--all and a selector are mutually exclusive"
     [[ ${opt_all} -eq 1 ]] && { cmd_sync_all; return; }
 
-    local main_gitdir main_worktree current_worktree
+    local main_gitdir main_worktree current_worktree target
     if [[ ${from_hook} -eq 1 ]]; then
         # GIT_DIR hygiene: git hooks export GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE,
         # which would make clc's CWD-based `git rev-parse` discovery resolve the
@@ -2885,21 +2929,21 @@ cmd_sync() {
 
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
     main_worktree=$(git_main_worktree "${main_gitdir}") || die "unable to determine main worktree"
-    current_worktree=$(git_current_worktree) || die "unable to determine current worktree"
+    target=$(resolve_target_worktree "${main_worktree}" "${selector}")
 
     # Identity = main worktree's HOME-relative path. Error, never guess, if outside $HOME.
     local rel="${main_worktree#${HOME}/}"
     [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
 
     # Interactive `save` is the DELIBERATE worktree→store promotion path: it syncs
-    # the current worktree's brain (not main's), so a user can push edits made
+    # the target worktree's brain (not main's), so a user can push edits made
     # inside a peer worktree. Nudge (to stderr) that main is canonical.
-    [[ "${current_worktree}" != "${main_worktree}" ]] \
-        && _peer_brain_diverges "${main_worktree}" "${current_worktree}" 2>/dev/null \
-        && warn_peer_source "${current_worktree}"
+    [[ "${target}" != "${main_worktree}" ]] \
+        && _peer_brain_diverges "${main_worktree}" "${target}" 2>/dev/null \
+        && warn_peer_source "${target}"
 
     store_init
-    with_store_lock store_sync_project "${rel}" "${current_worktree}" "${opt_force_empty}"
+    with_store_lock store_sync_project "${rel}" "${target}" "${opt_force_empty}"
 
     if [[ "${_STORE_SYNC_RESULT}" == "guarded" ]]; then
         local stored; stored=$(git -C "$(clc_store_dir)" ls-files -- "${rel}" 2>/dev/null | grep -c . || true)
@@ -2909,14 +2953,14 @@ cmd_sync() {
         return 0
     fi
 
-    # After a save the current worktree matches the store, so advance its baseline.
-    baseline_advance "${current_worktree}"
+    # After a save the target worktree matches the store, so advance its baseline.
+    baseline_advance "${target}"
 
     print_header "Synced"
     if [[ "${_STORE_SYNC_RESULT}" == "noop" ]]; then
         echo "  ${CLR_MUTED}(store already up to date)${CLR_RESET}"
     else
-        local n; n=$(collect_claude_files_in_dir "${current_worktree}" | grep -c . || true)
+        local n; n=$(collect_claude_files_in_dir "${target}" | grep -c . || true)
         echo "  ${n} Claude file(s) → store"
         # Trigger a debounced backup after a real (non-noop) sync (§4.9/§6.2).
         maybe_trigger_backup
@@ -3220,8 +3264,8 @@ ${CLR_BOLD}Options:${CLR_RESET}
 
 ${CLR_BOLD}Actions (Inspect):${CLR_RESET}
   ${CLR_BOLD}status${CLR_RESET}                 Show repository info and the numbered worktree list ${CLR_MUTED}(default)${CLR_RESET}
-  ${CLR_BOLD}ls${CLR_RESET}${CLR_MUTED}|list${CLR_RESET}                List Claude files. Tracked or git-visible
-                         files are marked.
+  ${CLR_BOLD}ls${CLR_RESET}${CLR_MUTED}|list${CLR_RESET} ${CLR_MUTED}[<selector>]${CLR_RESET}     List Claude files. Tracked or git-visible
+                         files are marked. ${CLR_MUTED}With <selector>, list another worktree's.${CLR_RESET}
 
 ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
   ${CLR_BOLD}enroll${CLR_RESET}                 Fully manage this repo: gitignore the Claude files,
@@ -3233,28 +3277,35 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
                          ${CLR_MUTED}(gitignore-only; the standalone step within enroll)${CLR_RESET}
   ${CLR_BOLD}unignore${CLR_RESET}               Remove Claude file patterns from .git/info/exclude
                          ${CLR_MUTED}(gitignore-only)${CLR_RESET}
-  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all] [--force-empty]${CLR_RESET}
+  ${CLR_BOLD}save${CLR_RESET} ${CLR_MUTED}[-a|--all] [--force-empty] [<selector>]${CLR_RESET}
                          Sync Claude files from the current worktree into the
                          central store. ${CLR_MUTED}Refuses to erase a populated store from
                          an empty worktree brain unless --force-empty is given.
-                         With --all, snapshot every enrolled repo (runnable
-                         from anywhere).${CLR_RESET}
-  ${CLR_BOLD}compare${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Compare current worktree against the stored
-                         state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.
-                         With --all, audit every enrolled repo.${CLR_RESET}
-  ${CLR_BOLD}diff${CLR_RESET} ${CLR_MUTED}[-a|--all] [--stat]${CLR_RESET}  Like compare, but prints a full Git diff (repo-relative
+                         With <selector>, save another worktree's brain. With --all,
+                         snapshot every enrolled repo (runnable from anywhere).${CLR_RESET}
+  ${CLR_BOLD}compare${CLR_RESET} ${CLR_MUTED}[-a|--all] [<selector>]${CLR_RESET}
+                         Compare current worktree against the stored state. ${CLR_MUTED}Exits 0
+                         if in sync, 1 if differences exist. With <selector>, compare
+                         another worktree. With --all, audit every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}diff${CLR_RESET} ${CLR_MUTED}[-a|--all] [--stat] [<selector>]${CLR_RESET}
+                         Like compare, but prints a full Git diff (repo-relative
                          paths) for all mismatches. ${CLR_MUTED}--stat shows a one-line-per-file
                          directional summary instead. Exits 0 if in sync, 1 if
-                         differences exist. With --all, diff every enrolled repo.${CLR_RESET}
-  ${CLR_BOLD}restore${CLR_RESET} ${CLR_MUTED}[-a|--all] [-y]${CLR_RESET}   Take the stored brain into the current worktree. Warns
+                         differences exist. With <selector>, diff another worktree;
+                         with --all, diff every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}restore${CLR_RESET} ${CLR_MUTED}[-a|--all] [-y] [<selector>]${CLR_RESET}
+                         Take the stored brain into the current worktree. Warns
                          (and lists files) only when local-only edits would be
                          discarded; a pure fast-forward applies as a clean update.
-                         ${CLR_MUTED}-y skips the prompt. With --all, reconcile every enrolled repo.${CLR_RESET}
-  ${CLR_BOLD}reconcile${CLR_RESET} ${CLR_MUTED}[--apply] [-y]${CLR_RESET}  Direction-aware 3-way view of the brain across the current
+                         ${CLR_MUTED}With <selector>, restore another worktree. -y skips the prompt.
+                         With --all, reconcile every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}reconcile${CLR_RESET} ${CLR_MUTED}[--apply] [-y] [<selector>]${CLR_RESET}
+                         Direction-aware 3-way view of the brain across the current
                          worktree, the store, and the main worktree (behind / ahead /
-                         diverged). ${CLR_MUTED}--apply resolves from here: fast-forward behind
-                         files, promote ahead files (→ store + main), and prompt a/b/c
-                         per diverged file (-y resolves the safe ones, skips diverged).${CLR_RESET}
+                         diverged). ${CLR_MUTED}With <selector>, target another worktree. --apply
+                         resolves from here: fast-forward behind files, promote ahead
+                         files (→ store + main), and prompt a/b/c per diverged file
+                         (-y resolves the safe ones, skips diverged).${CLR_RESET}
   ${CLR_BOLD}fsck${CLR_RESET} ${CLR_MUTED}[--fix]${CLR_RESET}             Report store working-tree↔index drift (untracked orphans);
                          ${CLR_MUTED}--fix removes them. Exits 1 if orphans found (without --fix).${CLR_RESET}
   ${CLR_BOLD}backup${CLR_RESET}                 Force an immediate push of the central store to all
@@ -3327,6 +3378,9 @@ ${CLR_BOLD}Flags:${CLR_RESET}
                      current worktree's brain is empty.
 
 ${CLR_MUTED}Claude files: CLAUDE.md (any depth), .claude/ (worktree root only).
+<selector>: a worktree by number, name, branch, or unique prefix — same as 'go'.
+The brain actions (ls, save, compare, diff, restore, reconcile) default to the
+current worktree; pass a <selector> to target another without cd-ing into it.
 Worktrees live under <main worktree>/.claude/worktrees/<name> (clc and Claude Code
 share this location); a worktree elsewhere is "foreign" and not auto-removed.
 Run 'clc' without arguments for repository and worktree status.${CLR_RESET}
