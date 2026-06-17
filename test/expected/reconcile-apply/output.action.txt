@@ -1,0 +1,28 @@
+1. read-only reconcile from the peer:
+Reconcile
+  current worktree ↔ store
+    ↓ CLAUDE.md (behind — store is newer)
+    ↑ .claude/a.md (ahead — local edit not in store)
+    ✗ .claude/b.md (diverged — both changed)
+  main worktree ↔ store
+    in sync
+
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore
+
+2. reconcile --apply (answer 'a' = take store for diverged b.md):
+Reconcile
+  current worktree ↔ store
+    ↓ CLAUDE.md (behind — store is newer)
+    ↑ .claude/a.md (ahead — local edit not in store)
+    ✗ .claude/b.md (diverged — both changed)
+
+  Resolve diverged files:
+    ✗ .claude/b.md  (a) take store  (b) keep & promote local  (c) skip [a/b/c] 
+Applied
+  promoted 1 → store + main, took 2 from store
+
+3. resulting peer brain:
+   CLAUDE.md=main2  a.md=a2-peer  b.md=b2-main
+   store  a.md=a2-peer  main a.md=a2-peer

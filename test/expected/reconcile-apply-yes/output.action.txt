@@ -1,0 +1,16 @@
+reconcile --apply -y (safe-only):
+Reconcile
+  current worktree ↔ store
+    ↓ CLAUDE.md (behind — store is newer)
+    ↑ .claude/a.md (ahead — local edit not in store)
+    ✗ .claude/b.md (diverged — both changed)
+
+  Left 1 diverged file(s) for manual resolution (omit -y to choose):
+    ✗ .claude/b.md
+
+Applied
+  promoted 1 → store + main, took 1 from store
+
+resulting peer brain:
+  CLAUDE.md=main2  a.md=a2-peer  b.md=b2-peer
+  store a.md=a2-peer  store b.md=b2-main

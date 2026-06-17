@@ -6,7 +6,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CLC_VERSION="3.0.1"
+CLC_VERSION="3.1.0"
 # Explicit CLC_STORE env override (captured at startup). When set, it overrides
 # the v2 data/store root (back-compat + test isolation); see clc_data_dir.
 CLC_STORE_OVERRIDE="${CLC_STORE:-}"
@@ -240,12 +240,15 @@ store_sync_project() {
     fi
 
     # Drop orphans: tracked files under rel that are no longer in the brain
-    # (excluding files that belong to a nested boundary subtree). `update-index
-    # --force-remove` is used first because it is a pure index op that never
-    # recurses into a linked worktree's gitdir — plain `git rm` exits 128 on a
-    # gitlink (mode 160000), so a stale nested-worktree gitlink would otherwise
-    # survive forever as debris. The `git rm` fallback also cleans the store
-    # working tree for ordinary orphan files.
+    # (excluding files that belong to a nested boundary subtree). `git rm -rf`
+    # de-indexes AND deletes the working-tree copy in one step for ordinary files.
+    # A gitlink (mode 160000 — a stale nested-worktree pointer) makes `git rm` exit
+    # 128, so on failure fall back to a pure index force-remove plus a manual rm of
+    # the on-disk path. Either way the store working tree is left with NO untracked
+    # orphan: the historical bug was running force-remove FIRST (de-indexing the
+    # path) so the later `git rm` no longer matched and the file lingered as
+    # untracked debris — invisible to git (and backups) yet still driving every
+    # filesystem-walk-based diff/restore.
     while IFS= read -r -d '' t; do
         local t_rel="${t#${rel}/}" b in_boundary=0
         while IFS= read -r b; do
@@ -254,8 +257,10 @@ store_sync_project() {
         done < "${subtmp}"
         [[ ${in_boundary} -eq 1 ]] && continue
         if ! grep -qxF "${t_rel}" "${Ftmp}"; then
-            git -C "${store}" update-index --force-remove -- "${t}" >/dev/null 2>&1 || true
-            git -C "${store}" rm -q -- "${t}" >/dev/null 2>&1 || true
+            if ! git -C "${store}" rm -rfq --ignore-unmatch -- "${t}" >/dev/null 2>&1; then
+                git -C "${store}" update-index --force-remove -- "${t}" >/dev/null 2>&1 || true
+                rm -rf "${store}/${t}"
+            fi
         fi
     done < <(git -C "${store}" ls-files -z -- "${rel}")
     rm -f "${subtmp}"
@@ -823,35 +828,241 @@ _compare_claude_files() {
     rm -f "$tmp_wt" "$tmp_storage"
 }
 
-# Apply restore from save_dir into wt using pre-populated _CMP_* globals.
-# Prompts only for destructive operations (different content, file only in worktree).
-# Non-destructive additions (file only in storage) are applied silently.
-# Returns 1 if user aborts; 0 on success.
+# ── Per-worktree baseline + 3-way classification ──────────────────────────────
+#
+# The baseline is the store commit SHA a worktree last agreed with. It turns the
+# binary "differs" verdict into a directional one (behind / ahead / diverged), so
+# clc can auto-apply what is provably safe and prompt only for genuine conflicts.
+# It lives in the worktree's PRIVATE gitdir (main → main .git; peer → .git/worktrees/
+# <name>): per-worktree, uncommitted, never walked by the brain collection (so it
+# can't leak into status/ls/the store), and it survives `clc name` (git worktree
+# move keeps the gitdir). Absent = UNKNOWN → callers stay conservative (never auto);
+# it self-heals on the next save/restore/sync.
+
+# Echo the store HEAD commit (empty + nonzero when the store has no commits yet).
+store_head() { git -C "$(clc_store_dir)" rev-parse HEAD 2>/dev/null; }
+
+# Echo the baseline file path for a worktree (nonzero if not a git worktree).
+baseline_file() {
+    local gd; gd=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+    echo "${gd}/clc-brain-baseline"
+}
+
+# Echo a worktree's recorded baseline SHA (nonzero + empty when none recorded).
+baseline_read() {
+    local f; f=$(baseline_file "$1") || return 1
+    [[ -f "${f}" ]] || return 1
+    cat "${f}"
+}
+
+# Record a worktree's baseline SHA. Fail-safe: a missing SHA clears nothing (no-op).
+baseline_write() {
+    local wt="$1" sha="$2" f
+    [[ -n "${sha}" ]] || return 0
+    f=$(baseline_file "${wt}") || return 1
+    printf '%s\n' "${sha}" > "${f}"
+}
+
+# Advance a worktree's baseline to the current store HEAD (called after a worktree
+# and the store are brought into agreement).
+baseline_advance() {
+    local sha; sha=$(store_head) || return 0
+    baseline_write "$1" "${sha}" || true
+    return 0
+}
+
+# Return 0 if the baseline blob (store commit <sha>, path <relf>) equals <file>.
+# Absence is a value on both sides: blob-absent AND file-absent → equal.
+_baseline_eq() {
+    local sha="$1" relf="$2" file="$3" store
+    store="$(clc_store_dir)"
+    local blob=0 ondisk=0
+    git -C "${store}" cat-file -e "${sha}:${relf}" 2>/dev/null && blob=1
+    [[ -f "${file}" ]] && ondisk=1
+    [[ ${blob} -eq 0 && ${ondisk} -eq 0 ]] && return 0
+    [[ ${blob} -ne ${ondisk} ]] && return 1
+    git -C "${store}" show "${sha}:${relf}" 2>/dev/null | cmp -s - "${file}"
+}
+
+# Return 0 if <relf> is NOT tracked in the store git (an untracked working-tree
+# orphan — the debris the historical orphan-removal bug left behind; see fsck).
+_store_untracked() {
+    local store; store="$(clc_store_dir)"
+    ! git -C "${store}" ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+}
+
+# Globals populated by _classify_brain.
+_CL_SAME=()
+_CL_BEHIND=()
+_CL_AHEAD=()
+_CL_DIVERGED=()
+_CL_UNKNOWN=0   # 1 when no baseline was available (differences treated as conflicts)
+
+# Classify each brain file of <wt> against the store mirror <save_dir> using the
+# 3-way baseline <baseline_sha> (may be empty → UNKNOWN). <rel> is the project's
+# store subtree path (HOME-relative main worktree), used to resolve baseline blobs.
+# Reuses _compare_claude_files for the boundary-pruned enumeration, then refines
+# the non-SAME files by direction.
+_classify_brain() {
+    local wt="$1" save_dir="$2" baseline_sha="$3" rel="$4"
+    _CL_SAME=(); _CL_BEHIND=(); _CL_AHEAD=(); _CL_DIVERGED=(); _CL_UNKNOWN=0
+    _CL_REL="${rel}"
+
+    _compare_claude_files "${wt}" "${save_dir}"
+    local f
+    for f in ${_CMP_SAME[@]+"${_CMP_SAME[@]}"}; do _CL_SAME+=("${f}"); done
+
+    # No baseline (UNKNOWN): a store-only file is always a safe addition (treat as
+    # behind — restore simply adds it); a worktree-present difference can't be proven
+    # stale, so treat it as diverged (never auto-clobbered).
+    if [[ -z "${baseline_sha}" ]]; then
+        _CL_UNKNOWN=1
+        for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _CL_BEHIND+=("${f}"); done
+        for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"} \
+                 ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _CL_DIVERGED+=("${f}"); done
+        return 0
+    fi
+
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"} \
+             ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"} \
+             ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
+        local relf="${rel}/${f}" wb=0 sb=0
+        _baseline_eq "${baseline_sha}" "${relf}" "${wt}/${f}"       && wb=1
+        _baseline_eq "${baseline_sha}" "${relf}" "${save_dir}/${f}" && sb=1
+        if   [[ ${wb} -eq 1 && ${sb} -eq 0 ]]; then _CL_BEHIND+=("${f}")
+        elif [[ ${sb} -eq 1 && ${wb} -eq 0 ]]; then _CL_AHEAD+=("${f}")
+        else _CL_DIVERGED+=("${f}")
+        fi
+    done
+}
+
+# ── Granular brain-file apply primitives ──────────────────────────────────────
+# All paths are project-relative brain files (e.g. ".claude/x.md"); absence is a
+# value (a missing source means "delete the target").
+
+# Take one file from the store mirror into a worktree (delete it from the worktree
+# when the store lacks it).
+_wt_take_file() {
+    local save_dir="$1" wt="$2" f="$3"
+    if [[ -f "${save_dir}/${f}" ]]; then
+        mkdir -p "$(dirname "${wt}/${f}")"; cp "${save_dir}/${f}" "${wt}/${f}"
+    else
+        rm -rf "${wt}/${f}"
+    fi
+}
+
+# Stage one worktree file into the store subtree (remove it from the store when the
+# worktree lacks it). Does NOT commit — the caller batches one commit.
+_store_put_file() {
+    local rel="$1" wt="$2" f="$3" store S
+    store="$(clc_store_dir)"; S="${store}/${rel}"
+    if [[ -f "${wt}/${f}" ]]; then
+        mkdir -p "$(dirname "${S}/${f}")"; cp "${wt}/${f}" "${S}/${f}"
+        git -C "${store}" add -- "${S}/${f}"
+    else
+        git -C "${store}" rm -rfq --ignore-unmatch -- "${rel}/${f}" >/dev/null 2>&1 || true
+        rm -rf "${S}/${f}"
+    fi
+}
+
+# Mirror one store file into the main worktree (delete it from main when the store
+# lacks it). Brain files are gitignored in main, so this never dirties main's git.
+_main_put_file() {
+    local rel="$1" main_wt="$2" f="$3" S
+    S="$(clc_store_dir)/${rel}"
+    if [[ -f "${S}/${f}" ]]; then
+        mkdir -p "$(dirname "${main_wt}/${f}")"; cp "${S}/${f}" "${main_wt}/${f}"
+    else
+        rm -rf "${main_wt}/${f}"
+    fi
+}
+
+# Return 0 if a worktree's brain matches the store mirror (no diffs). Clobbers _CMP_*.
+_brain_in_sync() {
+    _compare_claude_files "$1" "$2"
+    [[ $(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} )) -eq 0 ]]
+}
+
+# Advance a worktree's baseline to the store HEAD ONLY when it now fully agrees with
+# the store. A baseline is a single SHA asserting "this worktree == that store state"
+# for ALL files, so advancing while differences remain would mislabel them next time.
+_maybe_advance_baseline() {
+    _brain_in_sync "$1" "$2" && baseline_advance "$1"
+    return 0   # best-effort: a still-out-of-sync worktree must not trip set -e
+}
+
+# Promote a list of worktree brain files into the store as one commit, then mirror
+# them into the main worktree (so main's own mirror-sync keeps them). Echoes the
+# number of files whose promotion actually changed the store. MUST run under
+# with_store_lock. Baselines are advanced by the caller (only when fully in sync).
+_promote_files() {
+    local rel="$1" wt="$2" main_wt="$3"; shift 3
+    local store; store="$(clc_store_dir)"
+    local f
+    for f in "$@"; do _store_put_file "${rel}" "${wt}" "${f}"; done
+    if git -C "${store}" diff --cached --quiet -- "${rel}"; then echo 0; return 0; fi
+    git -C "${store}" commit -q -m "promote: ${rel}"
+    for f in "$@"; do _main_put_file "${rel}" "${main_wt}" "${f}"; done
+    echo "$#"
+}
+
+# Print the current _CL_* classification as a labelled directional view. Uses _CL_REL
+# to flag a "behind" file that is actually an untracked store orphan (fsck debris).
+_print_classified() {
+    local label="$1" f
+    echo "  ${label}"
+    local total=$(( ${#_CL_BEHIND[@]} + ${#_CL_AHEAD[@]} + ${#_CL_DIVERGED[@]} ))
+    if [[ ${total} -eq 0 ]]; then echo "    ${CLR_MUTED}in sync${CLR_RESET}"; return 0; fi
+    for f in ${_CL_BEHIND[@]+"${_CL_BEHIND[@]}"}; do
+        if _store_untracked "${_CL_REL}/${f}"; then
+            printf "    ${CLR_WARN}? %s${CLR_RESET} ${CLR_MUTED}(untracked orphan in store — run clc fsck)${CLR_RESET}\n" "${f}"
+        else
+            printf "    ↓ %s ${CLR_MUTED}(behind — store is newer)${CLR_RESET}\n" "${f}"
+        fi
+    done
+    for f in ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"};    do printf "    ↑ %s ${CLR_MUTED}(ahead — local edit not in store)${CLR_RESET}\n" "${f}"; done
+    for f in ${_CL_DIVERGED[@]+"${_CL_DIVERGED[@]}"}; do printf "    ${CLR_WARN}✗ %s${CLR_RESET} ${CLR_MUTED}(diverged — both changed)${CLR_RESET}\n" "${f}"; done
+    [[ ${_CL_UNKNOWN} -eq 1 && ${#_CL_DIVERGED[@]} -gt 0 ]] \
+        && echo "    ${CLR_MUTED}(no baseline recorded — local edits shown as diverged)${CLR_RESET}"
+    return 0
+}
+
+# Take the stored brain into a worktree, classification-aware. <opt_yes> skips the
+# confirmation. Only warns about data loss when the worktree carries local-only
+# content (ahead/diverged) that the restore would discard, and lists those files;
+# a pure fast-forward (only behind/additions) is applied as a clean update.
+# Returns 1 if the user aborts; 0 on success.
 _apply_restore() {
-    local wt="$1" save_dir="$2"
-    local destructive_diffs=$(( ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
+    local wt="$1" save_dir="$2" baseline_sha="$3" rel="$4" opt_yes="${5:-0}"
+    _classify_brain "${wt}" "${save_dir}" "${baseline_sha}" "${rel}"
 
-    _print_compare_output
+    print_header "Restore"
+    _print_classified "store → worktree"
 
-    if [[ ${destructive_diffs} -gt 0 ]]; then
-        if ! confirm $'\nSynchronize? (Data loss possible!) [y/N] '; then
-            echo "Aborted."
-            return 1
+    local -a at_risk=()
+    at_risk+=( ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"} ${_CL_DIVERGED[@]+"${_CL_DIVERGED[@]}"} )
+
+    if [[ ${#at_risk[@]} -gt 0 && ${opt_yes} -eq 0 ]]; then
+        echo
+        echo "  ${CLR_WARN}Local-only edits that would be discarded:${CLR_RESET}"
+        local f; for f in "${at_risk[@]}"; do printf "    ! %s\n" "${f}"; done
+        if ! confirm $'\nTake the stored brain and discard the above? [y/N] '; then
+            echo "Aborted."; return 1
         fi
     fi
 
-    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
-        mkdir -p "$(dirname "${wt}/${f}")"
-        cp "${save_dir}/${f}" "${wt}/${f}"
-    done
-    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
-        mkdir -p "$(dirname "${wt}/${f}")"
-        cp "${save_dir}/${f}" "${wt}/${f}"
-    done
-    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
-        rm -f "${wt}/${f}"
-    done
-    echo "Synchronized."
+    local f
+    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _wt_take_file "${save_dir}" "${wt}" "${f}"; done
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};    do _wt_take_file "${save_dir}" "${wt}" "${f}"; done
+    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _wt_take_file "${save_dir}" "${wt}" "${f}"; done
+    _maybe_advance_baseline "${wt}" "${save_dir}"
+
+    if [[ ${#at_risk[@]} -gt 0 ]]; then
+        echo "Synchronized (discarded ${#at_risk[@]} local-only file(s))."
+    else
+        local n=$(( ${#_CL_BEHIND[@]} + ${#_CMP_ONLY_STORAGE[@]} ))
+        echo "Clean update (${n} file(s))."
+    fi
 }
 
 # Print compare diff sections using the current _CMP_* globals.
@@ -884,6 +1095,37 @@ _print_repo_rows() {
         rel="${row%%$'\t'*}"
         printf "  %-*s  %s\n" "${maxw}" "${rel}" "${row#*$'\t'}"
     done
+}
+
+# Print a repo-relative git diff for one brain file between the store mirror and the
+# worktree. <kind> = del (store-only) | add (worktree-only) | mod (both, differ).
+# git diff --no-index prints the absolute argument paths (leading / stripped, under
+# the a/ b/ prefixes); strip the two known roots so headers read like reconcile's
+# repo-relative paths (a/<rel>, b/<rel>). Literal bash substring removal avoids any
+# sed metacharacter pitfalls. Trailing args pass through to git (e.g. --no-color).
+_diff_one() {
+    local kind="$1" save_dir="$2" wt="$3" f="$4"; shift 4
+    local sp="${save_dir#/}/" dp="${wt#/}/" a b line
+    case "${kind}" in
+        del) a="${save_dir}/${f}"; b="/dev/null" ;;
+        add) a="/dev/null";        b="${wt}/${f}" ;;
+        *)   a="${save_dir}/${f}"; b="${wt}/${f}" ;;
+    esac
+    git diff --no-index "$@" -- "${a}" "${b}" 2>/dev/null | while IFS= read -r line; do
+        line="${line//${sp}/}"; line="${line//${dp}/}"
+        printf '%s\n' "${line}"
+    done || true
+}
+
+# Print a directional --stat-style one-line-per-file summary from the current _CL_*
+# classification (behind/ahead/diverged), or a clean note when in sync.
+_print_diff_stat() {
+    local total=$(( ${#_CL_BEHIND[@]} + ${#_CL_AHEAD[@]} + ${#_CL_DIVERGED[@]} )) f
+    if [[ ${total} -eq 0 ]]; then echo "  ${CLR_MUTED}in sync${CLR_RESET}"; return 0; fi
+    for f in ${_CL_BEHIND[@]+"${_CL_BEHIND[@]}"};     do printf "  ↓ behind    %s\n" "${f}"; done
+    for f in ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"};       do printf "  ↑ ahead     %s\n" "${f}"; done
+    for f in ${_CL_DIVERGED[@]+"${_CL_DIVERGED[@]}"}; do printf "  ✗ diverged  %s\n" "${f}"; done
+    return 0
 }
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -929,6 +1171,7 @@ cmd_compare_all() {
 # a header then the storage→worktree deltas; in-sync/missing/never-synced repos get a
 # one-line status. Returns 1 if any present repo has drifted, else 0.
 cmd_diff_all() {
+    local opt_stat="${1:-0}"
     local any=0 drift_any=0 rel localpath save_dir diffs f
     local -a git_color=()
     [[ "${OPT_NO_COLOR}" -eq 1 ]] && git_color=("--no-color")
@@ -953,15 +1196,15 @@ cmd_diff_all() {
         fi
         drift_any=1
         printf "\n%s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
-        for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
-            git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" /dev/null || true
-        done
-        for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
-            git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" "${localpath}/${f}" || true
-        done
-        for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
-            git diff --no-index ${git_color[@]+"${git_color[@]}"} -- /dev/null "${localpath}/${f}" || true
-        done
+        if [[ ${opt_stat} -eq 1 ]]; then
+            _classify_brain "${localpath}" "${save_dir}" \
+                "$(baseline_read "${localpath}" 2>/dev/null || true)" "${rel}"
+            _print_diff_stat
+            continue
+        fi
+        for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _diff_one del "${save_dir}" "${localpath}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+        for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};      do _diff_one mod "${save_dir}" "${localpath}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+        for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _diff_one add "${save_dir}" "${localpath}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
     done < <(registry_read)
 
     if [[ ${any} -eq 0 ]]; then
@@ -975,6 +1218,7 @@ cmd_diff_all() {
 # drifted repo, delegates to _apply_restore (which keeps its per-repo data-loss
 # prompt); in-sync/missing/never-synced repos get a one-line status and are skipped.
 cmd_restore_all() {
+    local opt_yes="${1:-0}"
     local any=0 rel localpath save_dir diffs line
     print_header "Restore (all enrolled)"
     # Buffer the registry first: iterating via `while read < <(registry_read)` would
@@ -1002,7 +1246,7 @@ cmd_restore_all() {
             continue
         fi
         printf "\n%s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
-        _apply_restore "${localpath}" "${save_dir}" || true
+        _apply_restore "${localpath}" "${save_dir}" "$(baseline_read "${localpath}" 2>/dev/null || true)" "${rel}" "${opt_yes}" || true
     done
 
     [[ ${any} -eq 0 ]] && echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
@@ -1048,16 +1292,17 @@ cmd_compare() {
 }
 
 cmd_diff() {
-    local opt_all=0
+    local opt_all=0 opt_stat=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -a|--all) opt_all=1 ;;
+            -a|--all)  opt_all=1 ;;
+            --stat)    opt_stat=1 ;;
             -*) die "unknown option for 'diff': $1" ;;
             *)  die "unexpected argument: $1" ;;
         esac
         shift
     done
-    [[ ${opt_all} -eq 1 ]] && { cmd_diff_all; return; }
+    [[ ${opt_all} -eq 1 ]] && { cmd_diff_all "${opt_stat}"; return; }
 
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
@@ -1066,6 +1311,7 @@ cmd_diff() {
     current_worktree=$(git_current_worktree) \
                                          || die "unable to determine current worktree"
 
+    local rel="${main_worktree#${HOME}/}"
     local save_dir
     save_dir=$(store_mirror_dir "${main_worktree}") \
         || die "no saved state found — run 'clc save' first"
@@ -1077,38 +1323,40 @@ cmd_diff() {
     if [[ ${diffs} -eq 0 ]]; then
         echo "All ${total} Claude file(s) in current worktree are in sync with storage."
         return 0
+    fi
+
+    # --stat: directional one-line-per-file summary instead of full hunks.
+    if [[ ${opt_stat} -eq 1 ]]; then
+        print_header "Diff"
+        _classify_brain "${current_worktree}" "${save_dir}" \
+            "$(baseline_read "${current_worktree}" 2>/dev/null || true)" "${rel}"
+        _print_diff_stat
+        return 1
     fi
 
     local -a git_color=()
     [[ "${OPT_NO_COLOR}" -eq 1 ]] && git_color=("--no-color")
 
-    # Only in storage: file was deleted from worktree — show as deletion
-    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do
-        git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" /dev/null || true
-    done
-    # Different content: show storage → worktree delta
-    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"}; do
-        git diff --no-index ${git_color[@]+"${git_color[@]}"} -- "${save_dir}/${f}" "${current_worktree}/${f}" || true
-    done
-    # Only in worktree: new file not yet saved — show as addition
-    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do
-        git diff --no-index ${git_color[@]+"${git_color[@]}"} -- /dev/null "${current_worktree}/${f}" || true
-    done
+    # Repo-relative deltas (paths stripped to project-relative; see _diff_one).
+    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do _diff_one del "${save_dir}" "${current_worktree}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};      do _diff_one mod "${save_dir}" "${current_worktree}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
+    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do _diff_one add "${save_dir}" "${current_worktree}" "${f}" ${git_color[@]+"${git_color[@]}"}; done
 
     return 1
 }
 
 cmd_restore() {
-    local opt_all=0
+    local opt_all=0 opt_yes=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -a|--all) opt_all=1 ;;
+            -y|--yes) opt_yes=1 ;;
             -*) die "unknown option for 'restore': $1" ;;
             *)  die "unexpected argument: $1" ;;
         esac
         shift
     done
-    [[ ${opt_all} -eq 1 ]] && { cmd_restore_all; return; }
+    [[ ${opt_all} -eq 1 ]] && { cmd_restore_all "${opt_yes}"; return; }
 
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
@@ -1117,6 +1365,7 @@ cmd_restore() {
     current_worktree=$(git_current_worktree) \
                                          || die "unable to determine current worktree"
 
+    local rel="${main_worktree#${HOME}/}"
     local save_dir
     save_dir=$(store_mirror_dir "${main_worktree}") \
         || die "no saved state found — run 'clc save' first"
@@ -1130,31 +1379,74 @@ cmd_restore() {
         return 0
     fi
 
-    _apply_restore "${current_worktree}" "${save_dir}"
+    _apply_restore "${current_worktree}" "${save_dir}" \
+        "$(baseline_read "${current_worktree}" 2>/dev/null || true)" "${rel}" "${opt_yes}"
 }
 
-# Print one labeled reconcile delta from the current _CMP_* globals. Direction is
-# store-relative: '+' = only in store (worktree lacks it), '-' = only in the
-# worktree (store lacks it), '~' = present in both but differing.
-_print_reconcile_delta() {
-    local label="$1"
-    local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
-    echo "  ${label}"
-    if [[ ${diffs} -eq 0 ]]; then
-        echo "    ${CLR_MUTED}in sync${CLR_RESET}"
-        return 0
+# Resolve the current worktree's brain divergence by direction (using the _CL_*
+# globals already populated by _classify_brain): take behind files from the store,
+# promote ahead files into the store + main, and resolve diverged files either
+# interactively (a/b/c) or — under -y — skip them. Mutates the worktree (and, for
+# promotions, the store and main). Advances baselines only when fully back in sync.
+_reconcile_apply() {
+    local wt="$1" save_dir="$2" rel="$3" main_wt="$4" opt_yes="$5"
+    local -a take=() promote=()
+    local f
+    take+=( ${_CL_BEHIND[@]+"${_CL_BEHIND[@]}"} )
+    promote+=( ${_CL_AHEAD[@]+"${_CL_AHEAD[@]}"} )
+
+    if [[ ${#_CL_DIVERGED[@]} -gt 0 ]]; then
+        echo
+        if [[ ${opt_yes} -eq 1 ]]; then
+            echo "  ${CLR_WARN}Left ${#_CL_DIVERGED[@]} diverged file(s) for manual resolution (omit -y to choose):${CLR_RESET}"
+            for f in "${_CL_DIVERGED[@]}"; do printf "    ✗ %s\n" "${f}"; done
+        else
+            echo "  ${CLR_BOLD}Resolve diverged files:${CLR_RESET}"
+            for f in "${_CL_DIVERGED[@]}"; do
+                local ans=""
+                printf "    ✗ %s  (a) take store  (b) keep & promote local  (c) skip [a/b/c] " "${f}"
+                read -r ans || ans=""
+                case "${ans}" in
+                    a|A) take+=("${f}") ;;
+                    b|B) promote+=("${f}") ;;
+                    *)   echo "      skipped" ;;
+                esac
+            done
+        fi
     fi
-    for f in ${_CMP_ONLY_WORKTREE[@]+"${_CMP_ONLY_WORKTREE[@]}"}; do printf "    - %s ${CLR_MUTED}(store lacks it)${CLR_RESET}\n" "$f"; done
-    for f in ${_CMP_DIFFERENT[@]+"${_CMP_DIFFERENT[@]}"};    do printf "    ~ %s ${CLR_MUTED}(differs)${CLR_RESET}\n" "$f"; done
-    for f in ${_CMP_ONLY_STORAGE[@]+"${_CMP_ONLY_STORAGE[@]}"}; do printf "    + %s ${CLR_MUTED}(only in store)${CLR_RESET}\n" "$f"; done
+
+    if [[ ${#promote[@]} -gt 0 ]]; then
+        store_init
+        with_store_lock _promote_files "${rel}" "${wt}" "${main_wt}" "${promote[@]}" >/dev/null
+    fi
+    for f in ${take[@]+"${take[@]}"}; do _wt_take_file "${save_dir}" "${wt}" "${f}"; done
+
+    _maybe_advance_baseline "${wt}" "${save_dir}"
+    [[ "${main_wt}" != "${wt}" ]] && _maybe_advance_baseline "${main_wt}" "${save_dir}"
+
+    echo
+    print_header "Applied"
+    printf "  promoted %d → store + main, took %d from store\n" "${#promote[@]}" "${#take[@]}"
+    [[ ${#promote[@]} -gt 0 ]] && maybe_trigger_backup
+    return 0
 }
 
-# `clc reconcile` — read-only 3-way view of the second brain across the current
-# worktree, the central store (canonical), and the main worktree. Surfaces where a
-# worktree's brain has diverged so the user can promote (`clc save`) or take the
-# stored brain (`clc restore`) deliberately. Never mutates anything.
+# `clc reconcile [--apply] [-y]` — direction-aware 3-way view of the second brain
+# across the current worktree, the central store, and the main worktree. Read-only
+# by default (behind/ahead/diverged labels); with --apply it resolves from one
+# place: auto fast-forward behind files (take store), auto promote ahead files
+# (store + main), and prompt a/b/c per diverged file (skipped under -y).
 cmd_reconcile() {
-    [[ $# -eq 0 ]] || die "unexpected argument: $1"
+    local opt_apply=0 opt_yes=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --apply)  opt_apply=1 ;;
+            -y|--yes) opt_yes=1 ;;
+            -*) die "unknown option for 'reconcile': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
 
     local main_gitdir main_worktree current_worktree
     main_gitdir=$(git_main_gitdir)       || die "not inside a Git repository"
@@ -1163,28 +1455,37 @@ cmd_reconcile() {
     current_worktree=$(git_current_worktree) \
                                          || die "unable to determine current worktree"
 
+    local rel="${main_worktree#${HOME}/}"
     local save_dir
     save_dir=$(store_mirror_dir "${main_worktree}") \
         || die "no stored brain found — run 'clc save' first"
 
     print_header "Reconcile"
 
+    # Current worktree ↔ store (the actionable view).
+    _classify_brain "${current_worktree}" "${save_dir}" \
+        "$(baseline_read "${current_worktree}" 2>/dev/null || true)" "${rel}"
     if [[ "${current_worktree}" == "${main_worktree}" ]]; then
-        _compare_claude_files "${main_worktree}" "${save_dir}"
-        _print_reconcile_delta "main worktree ↔ store"
-        echo
-        echo "  ${CLR_MUTED}Promote local edits into the store:  clc save${CLR_RESET}"
-        echo "  ${CLR_MUTED}Take the stored brain locally:       clc restore${CLR_RESET}"
+        _print_classified "main worktree ↔ store"
+    else
+        _print_classified "current worktree ↔ store"
+    fi
+
+    if [[ ${opt_apply} -eq 1 ]]; then
+        _reconcile_apply "${current_worktree}" "${save_dir}" "${rel}" "${main_worktree}" "${opt_yes}"
         return 0
     fi
 
-    _compare_claude_files "${current_worktree}" "${save_dir}"
-    _print_reconcile_delta "current worktree ↔ store"
-    _compare_claude_files "${main_worktree}" "${save_dir}"
-    _print_reconcile_delta "main worktree ↔ store"
+    # Read-only: for a peer, also show the main↔store context row, then hint.
+    if [[ "${current_worktree}" != "${main_worktree}" ]]; then
+        _classify_brain "${main_worktree}" "${save_dir}" \
+            "$(baseline_read "${main_worktree}" 2>/dev/null || true)" "${rel}"
+        _print_classified "main worktree ↔ store"
+    fi
     echo
-    echo "  ${CLR_MUTED}Promote this worktree's edits into the store:  clc save${CLR_RESET}"
-    echo "  ${CLR_MUTED}Take the stored brain into this worktree:      clc restore${CLR_RESET}"
+    echo "  ${CLR_MUTED}Resolve everything from here:  clc reconcile --apply${CLR_RESET}"
+    echo "  ${CLR_MUTED}Promote local edits:           clc save${CLR_RESET}"
+    echo "  ${CLR_MUTED}Take the stored brain:         clc restore${CLR_RESET}"
 }
 
 # Restore a project's stored brain into a freshly created worktree. Silent for
@@ -1192,6 +1493,7 @@ cmd_reconcile() {
 # "(no saved state)" note when nothing is stored yet.
 _restore_brain_into() {
     local main_worktree="$1" wt="$2"
+    local rel="${main_worktree#${HOME}/}"
     local save_dir
     if save_dir=$(store_mirror_dir "${main_worktree}"); then
         _compare_claude_files "${wt}" "${save_dir}"
@@ -1199,15 +1501,40 @@ _restore_brain_into() {
         local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
         if [[ ${diffs} -eq 0 ]]; then
             echo "All ${total} Claude file(s) in new worktree are in sync with storage."
+            baseline_advance "${wt}"
             echo
         else
-            _apply_restore "${wt}" "${save_dir}" || true
+            _apply_restore "${wt}" "${save_dir}" \
+                "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}" 0 || true
             echo
         fi
     else
         echo "${CLR_MUTED}(no saved state — run 'clc save' to save Claude files first)${CLR_RESET}"
         echo
     fi
+}
+
+# Before resuming a worktree, refresh its brain when it is purely behind the store
+# (a safe fast-forward), with a one-line notice; otherwise nudge (it carries local
+# or diverged edits). No-op for the main worktree and under --no-brain. Fail-safe.
+_go_resume_refresh() {
+    local main_wt="$1" wt="$2"
+    [[ "${wt}" == "${main_wt}" ]] && return 0
+    local save_dir; save_dir=$(store_mirror_dir "${main_wt}" 2>/dev/null) || return 0
+    local rel="${main_wt#${HOME}/}"
+    _classify_brain "${wt}" "${save_dir}" "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}"
+    local behind=${#_CL_BEHIND[@]} ahead=${#_CL_AHEAD[@]} diverged=${#_CL_DIVERGED[@]}
+    if [[ ${behind} -gt 0 && ${ahead} -eq 0 && ${diverged} -eq 0 ]]; then
+        local f
+        for f in "${_CL_BEHIND[@]}"; do _wt_take_file "${save_dir}" "${wt}" "${f}"; done
+        _maybe_advance_baseline "${wt}" "${save_dir}"
+        printf "  ${CLR_MUTED}refreshed %d brain file(s) from store${CLR_RESET}\n" "${behind}"
+    elif [[ ${diverged} -gt 0 ]]; then
+        printf "  ${CLR_WARN}brain diverged from store — run 'clc reconcile'${CLR_RESET}\n"
+    elif [[ ${ahead} -gt 0 ]]; then
+        printf "  ${CLR_MUTED}brain has local edits not in store — run 'clc reconcile'${CLR_RESET}\n"
+    fi
+    return 0
 }
 
 # Create a managed worktree under .claude/worktrees/<name> for <selector>, restore
@@ -1311,6 +1638,7 @@ cmd_go() {
         IFS=$'\002' read -r type name path branch dirty <<< "${row}"
         print_header "Launching" "${branch}"
         printf "  %s\n" "$(short_path "${path}")"
+        [[ ${opt_no_brain} -eq 0 ]] && _go_resume_refresh "${main_worktree}" "${path}"
         _launch_claude "${path}" ${pass[@]+"${pass[@]}"}
         return 0
     fi
@@ -1956,6 +2284,8 @@ _enroll_at() {
     # 2+4. Register + initial sync (one lock acquisition, two store commits).
     store_init
     with_store_lock _store_enroll "${rel}" "${origin}" "${current_worktree}"
+    # The just-synced worktree now matches the store — record its baseline.
+    baseline_advance "${current_worktree}"
 
     # 3. Install hooks (once, at the main gitdir).
     install_hooks "${main_gitdir}"
@@ -2106,6 +2436,44 @@ CLC_BACKUP_INTERVAL_DEFAULT=900
 
 # Single wall-clock source (§6.2 CLC_NOW seam). ALL time math goes through this.
 now_epoch() { echo "${CLC_NOW:-$(date +%s)}"; }
+
+# ── Rate-limited hook nudges ──────────────────────────────────────────────────
+# Advisory nudges (a peer brain that diverged or fell behind) fire on ordinary git
+# operations, so they are rate-limited per worktree to avoid printing on every
+# checkout/commit. Auto-promotion notices report a real action and are NOT routed
+# here — they always print. Interval default 900s; override via CLC_NUDGE_INTERVAL.
+nudge_stamp_file() {
+    local key; key=$(printf '%s' "$1" | tr '/ ' '__')
+    echo "$(clc_state_dir)/nudge/${key}.stamp"
+}
+# Return 0 if a nudge for this worktree is due (no recent stamp).
+nudge_due() {
+    local f; f=$(nudge_stamp_file "$1")
+    [[ -f "${f}" ]] || return 0
+    local last now; last=$(cat "${f}" 2>/dev/null || echo 0); now=$(now_epoch)
+    [[ $(( now - last )) -ge ${CLC_NUDGE_INTERVAL:-900} ]]
+}
+nudge_mark() {
+    local f; f=$(nudge_stamp_file "$1")
+    mkdir -p "$(dirname "${f}")"; printf '%s\n' "$(now_epoch)" > "${f}"
+}
+# Emit a rate-limited advisory nudge (stderr) for a worktree, then stamp it.
+_nudge() {
+    local wt="$1"; shift
+    nudge_due "${wt}" || return 0
+    printf '%sclc: %s%s\n' "${CLR_WARN}" "$*" "${CLR_RESET}" >&2
+    nudge_mark "${wt}"
+}
+
+# Return 0 if two paths hold equal content; absence is a value (both-absent → equal).
+_files_eq() {
+    local a="$1" b="$2" ae=0 be=0
+    [[ -f "${a}" ]] && ae=1
+    [[ -f "${b}" ]] && be=1
+    [[ ${ae} -eq 0 && ${be} -eq 0 ]] && return 0
+    [[ ${ae} -ne ${be} ]] && return 1
+    cmp -s "${a}" "${b}"
+}
 
 # Expand a leading ~ to $HOME (paths are stored ~-relative; expand at read, §4.5).
 expand_tilde() {
@@ -2296,6 +2664,75 @@ cmd_backup() {
     done
 }
 
+# `clc fsck [--fix]` — report (and with --fix, clean) store working-tree↔index drift.
+# The chief target is an UNTRACKED file in the store working tree: history left by
+# the old orphan-removal bug (de-indexed but not deleted), invisible to git/backups
+# yet active in every filesystem-walk diff/restore. Read-only by default; --fix rm's
+# the orphans under the store lock. Per enrolled subtree, scoped to its rel.
+cmd_fsck() {
+    local opt_fix=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--fix) opt_fix=1 ;;
+            -*) die "unknown option for 'fsck': $1" ;;
+            *)  die "unexpected argument: $1" ;;
+        esac
+        shift
+    done
+
+    local store; store="$(clc_store_dir)"
+    print_header "Fsck"
+    if [[ ! -d "${store}/.git" ]]; then
+        echo "  ${CLR_MUTED}(no store yet)${CLR_RESET}"; return 0
+    fi
+
+    local any=0 total=0 rel f
+    local -a rows=()
+    while IFS=$'\t' read -r rel _ _; do
+        [[ -n "${rel}" ]] || continue
+        any=1
+        local -a orphans=()
+        while IFS= read -r f; do
+            [[ -n "${f}" ]] && orphans+=("${f}")
+        done < <(git -C "${store}" ls-files --others --exclude-standard -- "${rel}" 2>/dev/null)
+        [[ ${#orphans[@]} -eq 0 ]] && continue
+        total=$(( total + ${#orphans[@]} ))
+        rows+=("${rel}"$'\t'"${#orphans[@]}")
+        if [[ ${opt_fix} -eq 1 ]]; then
+            with_store_lock _fsck_remove "${store}" "${orphans[@]}"
+        fi
+        printf "  %s%s%s\n" "${CLR_BOLD}" "${rel}" "${CLR_RESET}"
+        for f in "${orphans[@]}"; do
+            printf "    %s%s %s%s\n" \
+                "${CLR_WARN}" "$([[ ${opt_fix} -eq 1 ]] && echo 'removed' || echo 'orphan')" \
+                "${f#${rel}/}" "${CLR_RESET}"
+        done
+    done < <(registry_read)
+
+    if [[ ${any} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}(nothing enrolled)${CLR_RESET}"
+    elif [[ ${total} -eq 0 ]]; then
+        echo "  ${CLR_MUTED}clean — no untracked orphans in the store${CLR_RESET}"
+    elif [[ ${opt_fix} -eq 1 ]]; then
+        echo
+        echo "  removed ${total} untracked orphan(s)"
+        maybe_trigger_backup
+    else
+        echo
+        echo "  ${CLR_MUTED}${total} untracked orphan(s); re-run with --fix to remove${CLR_RESET}"
+        return 1
+    fi
+    return 0
+}
+
+# Remove untracked store orphans (working-tree files only — they are not indexed).
+# MUST run under with_store_lock.
+_fsck_remove() {
+    local store="$1"; shift
+    local f
+    for f in "$@"; do rm -rf "${store}/${f}"; done
+}
+
 # ── v2 sync command (hidden/experimental) ─────────────────────────────────────
 
 # Emit the single non-alarming peer-divergence warning to STDERR. Surfaces through
@@ -2319,6 +2756,49 @@ _peer_brain_diverges() {
     _compare_claude_files "${current_worktree}" "${save_dir}" || return 1
     local diffs=$(( ${#_CMP_ONLY_STORAGE[@]} + ${#_CMP_DIFFERENT[@]} + ${#_CMP_ONLY_WORKTREE[@]} ))
     [[ ${diffs} -gt 0 ]]
+}
+
+# Peer-commit auto-reconcile (from a git hook). Classifies the peer's brain against
+# the store and acts only when provably safe:
+#  • PURELY ahead + uncontested by main → auto-promote into store + main (notice).
+#  • diverged / mixed / contested      → rate-limited nudge → clc reconcile.
+#  • behind only                       → rate-limited nudge → clc restore.
+# "Uncontested" = main's live copy of every ahead file equals the store's, so
+# mirroring into main can't clobber an uncommitted main edit. Pure-ahead lets the
+# baseline advance cleanly afterwards (peer == store). Fail-safe; never blocks the
+# commit. MUST be called with the store initialized and a usable store mirror.
+_hook_peer_autosync() {
+    local rel="$1" main_wt="$2" wt="$3" save_dir="$4"
+    local name; name=$(basename "${wt}")
+    _classify_brain "${wt}" "${save_dir}" "$(baseline_read "${wt}" 2>/dev/null || true)" "${rel}"
+
+    if [[ ${#_CL_DIVERGED[@]} -eq 0 && ${#_CL_BEHIND[@]} -eq 0 && ${#_CL_AHEAD[@]} -gt 0 ]]; then
+        local f contested=0
+        for f in "${_CL_AHEAD[@]}"; do
+            _files_eq "${main_wt}/${f}" "${save_dir}/${f}" || { contested=1; break; }
+        done
+        if [[ ${contested} -eq 0 ]]; then
+            local n
+            n=$(with_store_lock _promote_files "${rel}" "${wt}" "${main_wt}" "${_CL_AHEAD[@]}")
+            _maybe_advance_baseline "${wt}" "${save_dir}"
+            _maybe_advance_baseline "${main_wt}" "${save_dir}"
+            printf '%sclc: promoted %s brain file(s) from '\''%s'\'' → store + main%s\n' \
+                "${CLR_WARN}" "${n}" "${name}" "${CLR_RESET}" >&2
+            maybe_trigger_backup
+            return 0
+        fi
+    fi
+
+    # A purely-behind peer is the normal post-spawn state and is refreshed on the
+    # next `clc go` resume (a safe fast-forward), so it stays silent here — nudging
+    # "run clc restore" on every commit/checkout was the noise the field report
+    # flagged. Only the actionable, can't-auto cases nudge (rate-limited).
+    if [[ ${#_CL_DIVERGED[@]} -gt 0 ]]; then
+        _nudge "${wt}" "'${name}' brain diverged from the store — run 'clc reconcile' to resolve"
+    elif [[ ${#_CL_AHEAD[@]} -gt 0 ]]; then
+        _nudge "${wt}" "'${name}' brain has local edits to reconcile — run 'clc reconcile'"
+    fi
+    return 0
 }
 
 # Sync the current worktree's second brain into the central git store (§6.1:
@@ -2378,21 +2858,28 @@ cmd_sync() {
         # resurrect store entries from a stray leftover hook on an unenrolled repo.
         is_enrolled "${main_worktree}" || exit 0
         store_init >/dev/null 2>&1 || exit 0
-        # The store mirrors the MAIN worktree (canonical) regardless of which
-        # worktree fired the hook. This is what makes a commit/checkout in a
-        # brain-less or divergent peer worktree harmless — it can never clobber or
-        # wipe the canonical brain (and never forces past the empty guard).
-        with_store_lock store_sync_project "${rel}" "${main_worktree}" 0 >/dev/null 2>&1 || true
-        # Nudge (to stderr) when the committing worktree is a peer whose brain
-        # diverges from the store — its edits were NOT auto-synced; reconcile them
-        # deliberately with `clc save`/`clc restore`. Fail-safe.
-        if [[ "${current_worktree}" != "${main_worktree}" ]] \
-           && _peer_brain_diverges "${main_worktree}" "${current_worktree}" 2>/dev/null; then
-            warn_peer_source "${current_worktree}"
+
+        # MAIN commit (canonical trunk): mirror main → store, advance main's baseline.
+        if [[ "${current_worktree}" == "${main_worktree}" ]]; then
+            with_store_lock store_sync_project "${rel}" "${main_worktree}" 0 >/dev/null 2>&1 || true
+            baseline_advance "${main_worktree}" 2>/dev/null || true
+            [[ "${_STORE_SYNC_RESULT}" == "synced" ]] && maybe_trigger_backup
+            exit 0
         fi
-        # Backup is debounced + backgrounded + fail-safe: a successful sync may
-        # trigger a push, but it must never block/hang the commit (§4.9/§6.2).
-        [[ "${_STORE_SYNC_RESULT}" == "synced" ]] && maybe_trigger_backup
+
+        # PEER commit. Seed the store from main if it was never synced (first brain),
+        # then bail — there is nothing to classify against yet.
+        local save_dir
+        if ! save_dir=$(store_mirror_dir "${main_worktree}" 2>/dev/null); then
+            with_store_lock store_sync_project "${rel}" "${main_worktree}" 0 >/dev/null 2>&1 || true
+            baseline_advance "${main_worktree}" 2>/dev/null || true
+            exit 0
+        fi
+        # Auto-promote provably-safe peer edits into store + main; else emit a
+        # rate-limited nudge. Notices/nudges go to stderr (the hook wrapper only
+        # silences stdout), so they reach the user without polluting commit output.
+        # Fail-safe: never blocks the commit.
+        _hook_peer_autosync "${rel}" "${main_worktree}" "${current_worktree}" "${save_dir}" || true
         exit 0
     fi
 
@@ -2421,6 +2908,9 @@ cmd_sync() {
         echo "  ${CLR_MUTED}Re-run with --force-empty to erase the stored brain.${CLR_RESET}"
         return 0
     fi
+
+    # After a save the current worktree matches the store, so advance its baseline.
+    baseline_advance "${current_worktree}"
 
     print_header "Synced"
     if [[ "${_STORE_SYNC_RESULT}" == "noop" ]]; then
@@ -2752,15 +3242,21 @@ ${CLR_BOLD}Actions (Claude files):${CLR_RESET}
   ${CLR_BOLD}compare${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Compare current worktree against the stored
                          state. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.
                          With --all, audit every enrolled repo.${CLR_RESET}
-  ${CLR_BOLD}diff${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}          Like compare, but prints a full Git diff for all
-                         mismatches. ${CLR_MUTED}Exits 0 if in sync, 1 if differences exist.
-                         With --all, diff every enrolled repo.${CLR_RESET}
-  ${CLR_BOLD}restore${CLR_RESET} ${CLR_MUTED}[-a|--all]${CLR_RESET}       Restore Claude files from the stored state
-                         to the current worktree. Prompts before making changes.
-                         ${CLR_MUTED}With --all, reconcile every enrolled repo.${CLR_RESET}
-  ${CLR_BOLD}reconcile${CLR_RESET}              Show a read-only 3-way view of the brain across the
-                         current worktree, the store, and the main worktree, so you
-                         can promote (save) or take (restore) edits deliberately.
+  ${CLR_BOLD}diff${CLR_RESET} ${CLR_MUTED}[-a|--all] [--stat]${CLR_RESET}  Like compare, but prints a full Git diff (repo-relative
+                         paths) for all mismatches. ${CLR_MUTED}--stat shows a one-line-per-file
+                         directional summary instead. Exits 0 if in sync, 1 if
+                         differences exist. With --all, diff every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}restore${CLR_RESET} ${CLR_MUTED}[-a|--all] [-y]${CLR_RESET}   Take the stored brain into the current worktree. Warns
+                         (and lists files) only when local-only edits would be
+                         discarded; a pure fast-forward applies as a clean update.
+                         ${CLR_MUTED}-y skips the prompt. With --all, reconcile every enrolled repo.${CLR_RESET}
+  ${CLR_BOLD}reconcile${CLR_RESET} ${CLR_MUTED}[--apply] [-y]${CLR_RESET}  Direction-aware 3-way view of the brain across the current
+                         worktree, the store, and the main worktree (behind / ahead /
+                         diverged). ${CLR_MUTED}--apply resolves from here: fast-forward behind
+                         files, promote ahead files (→ store + main), and prompt a/b/c
+                         per diverged file (-y resolves the safe ones, skips diverged).${CLR_RESET}
+  ${CLR_BOLD}fsck${CLR_RESET} ${CLR_MUTED}[--fix]${CLR_RESET}             Report store working-tree↔index drift (untracked orphans);
+                         ${CLR_MUTED}--fix removes them. Exits 1 if orphans found (without --fix).${CLR_RESET}
   ${CLR_BOLD}backup${CLR_RESET}                 Force an immediate push of the central store to all
                          configured backup targets ${CLR_MUTED}(remote and/or bundle)${CLR_RESET}.
 
@@ -2815,10 +3311,14 @@ ${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
 ${CLR_BOLD}Flags:${CLR_RESET}
   ${CLR_BOLD}-k, --keep-branch${CLR_RESET}  ${CLR_MUTED}(rm, prune, close)${CLR_RESET} Keep the worktree's git branch
                      instead of deleting it.
-  ${CLR_BOLD}-y, --yes${CLR_RESET}          ${CLR_MUTED}(go)${CLR_RESET} Skip the confirmation prompt when creating a
-                     worktree on a brand-new branch.
-      ${CLR_BOLD}--no-brain${CLR_RESET}     ${CLR_MUTED}(go)${CLR_RESET} Skip restoring Claude files into the new worktree.
+  ${CLR_BOLD}-y, --yes${CLR_RESET}          ${CLR_MUTED}(go, restore, reconcile)${CLR_RESET} Skip prompts: confirm a new
+                     branch (go); apply without confirmation (restore); resolve the
+                     safe files and skip diverged ones (reconcile --apply).
+      ${CLR_BOLD}--no-brain${CLR_RESET}     ${CLR_MUTED}(go)${CLR_RESET} Skip restoring/refreshing Claude files in the worktree.
       ${CLR_BOLD}--no-launch${CLR_RESET}    ${CLR_MUTED}(go)${CLR_RESET} Create the worktree but do not launch claude.
+      ${CLR_BOLD}--apply${CLR_RESET}        ${CLR_MUTED}(reconcile)${CLR_RESET} Resolve the 3-way divergence in place.
+      ${CLR_BOLD}--stat${CLR_RESET}         ${CLR_MUTED}(diff)${CLR_RESET} Directional one-line-per-file summary, no hunks.
+      ${CLR_BOLD}--fix${CLR_RESET}          ${CLR_MUTED}(fsck)${CLR_RESET} Remove the untracked orphans that were reported.
   ${CLR_BOLD}-c, --commit${CLR_RESET}       ${CLR_MUTED}(pull, close)${CLR_RESET} Commit immediately after staging
                      (opens editor with pre-populated message).
   ${CLR_BOLD}-a, --all${CLR_RESET}          ${CLR_MUTED}(save, compare, diff, restore)${CLR_RESET} Operate across every
@@ -2899,6 +3399,7 @@ main() {
         pull)         cmd_pull ${cmd_args[@]+"${cmd_args[@]}"} ;;
         close)        cmd_close ${cmd_args[@]+"${cmd_args[@]}"} ;;
         sync)         cmd_sync ${cmd_args[@]+"${cmd_args[@]}"} ;;
+        fsck)         cmd_fsck ${cmd_args[@]+"${cmd_args[@]}"} ;;
         backup)       cmd_backup ${cmd_args[@]+"${cmd_args[@]}"} ;;
         doctor)       cmd_doctor ${cmd_args[@]+"${cmd_args[@]}"} ;;
         relink)       cmd_relink ${cmd_args[@]+"${cmd_args[@]}"} ;;

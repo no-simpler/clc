@@ -29,9 +29,10 @@ echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
 
 (cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color enroll) > /dev/null
 
-# A peer that skipped seeding (its brain is absent → diverges from the store).
+# A peer created with --no-brain: its brain is absent, so it is purely behind the
+# store (which holds main's brain); main itself is in sync.
 (cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color go feat -y --no-brain --no-launch) > /dev/null 2>&1
 PEER="${CASE_DIR}/main/.claude/worktrees/feat"
 
-echo "reconcile from the peer (brain missing → diverges; main in sync):"
+echo "reconcile from the peer (brain missing → behind; main in sync):"
 (cd "${PEER}" && "$BASH" "${CLC}" --no-color reconcile)

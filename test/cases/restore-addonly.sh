@@ -33,9 +33,14 @@ echo '{}' > "${CASE_DIR}/main/.claude/settings.json"
 echo "# project instructions" > "${CASE_DIR}/main/CLAUDE.md"
 (cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color save) > /dev/null
 
+# Simulate a baseline-less worktree (a legacy/never-synced checkout): drop the
+# baseline so the store-only files classify as a pure behind/addition rather than a
+# tracked local deletion. With no local-only content, restore is a clean fast-forward.
+rm -f "${CASE_DIR}/main/.git/clc-brain-baseline"
+
 # Remove all Claude files from worktree — storage-only diff, no destructive ops
 rm -rf "${CASE_DIR}/main/.claude"
 rm "${CASE_DIR}/main/CLAUDE.md"
 
-# Restore should apply without prompting (no stdin needed)
+# Restore should apply without prompting (no stdin needed) — a clean update
 (cd "${CASE_DIR}/main" && "$BASH" "${CLC}" --no-color restore)

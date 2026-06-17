@@ -1,13 +1,17 @@
 1. main auto-sync — store CLAUDE.md after main commit:
 # edited in main
 
-2. peer commit — divergence nudge on commit stderr:
-   nudge emitted
-   store CLAUDE.md after peer commit (still canonical = main):
-# edited in main
-
-3. no-op — store commit count unchanged after non-brain commit:
-   store unchanged (no spurious commit)
-
-4. deliberate promotion — store CLAUDE.md after 'clc save' in peer:
+2. peer ahead — promotion notice on commit stderr:
+   promotion notice emitted
+   store CLAUDE.md after peer commit (promoted):
 # edited in peer
+   main CLAUDE.md after peer commit (mirrored into trunk):
+# edited in peer
+
+3. peer diverged — nudge on commit stderr:
+   reconcile nudge emitted
+   store CLAUDE.md after diverged peer commit (still main's):
+# main v2
+
+4. no-op — store commit count unchanged after non-brain main commit:
+   store unchanged (no spurious commit)

@@ -1,0 +1,4 @@
+Repository (parent dir: %%PARENT_DIR%%)
+
+Worktrees
+  1 * main  (main)

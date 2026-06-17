@@ -1,0 +1,6 @@
+Restore
+  store → worktree
+    ↑ CLAUDE.md (ahead — local edit not in store)
+Synchronized (discarded 1 local-only file(s)).
+
+CLAUDE.md after restore -y: # project instructions

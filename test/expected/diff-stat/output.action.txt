@@ -1,0 +1,4 @@
+Diff
+  ↑ ahead     CLAUDE.md
+  ↑ ahead     .claude/settings.json
+  ↑ ahead     docs/CLAUDE.md

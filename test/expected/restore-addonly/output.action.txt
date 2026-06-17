@@ -1,5 +1,5 @@
-Compare
-  Exists in storage only:
-    + .claude/settings.json
-    + CLAUDE.md
-Synchronized.
+Restore
+  store → worktree
+    ↓ .claude/settings.json (behind — store is newer)
+    ↓ CLAUDE.md (behind — store is newer)
+Clean update (2 file(s)).

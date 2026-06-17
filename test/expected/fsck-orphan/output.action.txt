@@ -1,0 +1,18 @@
+1. fsck (report):
+Fsck
+  <project>
+    orphan .claude/ORPHAN.md
+
+  1 untracked orphan(s); re-run with --fix to remove
+   exit=1
+
+2. fsck --fix:
+Fsck
+  <project>
+    removed .claude/ORPHAN.md
+
+  removed 1 untracked orphan(s)
+
+3. fsck after fix:
+Fsck
+  clean — no untracked orphans in the store

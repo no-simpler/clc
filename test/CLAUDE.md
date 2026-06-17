@@ -81,6 +81,31 @@ git -C "${STORE}" ls-files | sed "s|^${PREFIX}/|<project>/|"
 
 Pin `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` in the case (as `sync-basic.sh` does) so any leaked store-commit history stays deterministic; only explicit history commands surface SHAs, which `run.sh` scrubs to `%%SHA%%`.
 
+## Direction-aware reconciliation (v3.1)
+
+`reconcile`/`restore`/`go`-resume and the hooks classify each brain file as
+**behind / ahead / diverged** using a per-worktree **baseline** (the store SHA last
+agreed with), stored at `<worktree gitdir>/clc-brain-baseline`. Baselines are set by
+`enroll`, `save`, `restore`, `reconcile --apply`, `go`-create, and the hooks. They
+hold a SHA but live in the gitdir — never walked into the store/brain — so they do
+**not** leak into snapshots. Test implications:
+
+- A `clc save` records a baseline. After it, deleting/modifying a brain file is a
+  tracked local change (classified **ahead**), so `restore`/`reconcile` flag it. To
+  exercise the clean fast-forward path (no prompt), simulate a baseline-less worktree
+  by `rm -f "<main>/.git/clc-brain-baseline"` before the restore (see
+  `restore-addonly.sh`), or make the worktree genuinely behind (store advances via a
+  main commit; see `go-resume-refresh.sh`).
+- Peer brain edits made **without committing** (the brain is gitignored) never fire
+  the peer hook, so the divergence persists for `clc reconcile` to resolve — use this
+  to set up `reconcile-apply*.sh`. Advance the store via **main** commits (whose hook
+  mirrors main → store).
+- A **strictly-ahead, uncontested** peer commit auto-promotes into store + main with a
+  stderr notice (`→ store + main`); a diverged peer commit emits a rate-limited
+  `reconcile` nudge. `hook-autosync.sh` captures the commit stderr to assert both.
+- `clc diff` emits repo-relative paths (`a/<rel>`, `b/<rel>`); a case's own
+  `<save>`/`<wt>` sed normalization is now a no-op but harmless.
+
 ## Backups (P6)
 
 Backup tests (`backup-bundle.sh`, `backup-remote.sh`, `backup-debounce.sh`) exercise the store-push machinery (§4.9/§6.2) through its two determinism seams:

@@ -1,10 +1,13 @@
-Compare
-  Exists in storage only:
-    + .claude/settings.json
-  Different content:
-    ~ CLAUDE.md
-  Exists in worktree only:
-    - docs/CLAUDE.md
+Restore
+  store → worktree
+    ↑ CLAUDE.md (ahead — local edit not in store)
+    ↑ .claude/settings.json (ahead — local edit not in store)
+    ↑ docs/CLAUDE.md (ahead — local edit not in store)
 
-Synchronize? (Data loss possible!) [y/N] 
-Synchronized.
+  Local-only edits that would be discarded:
+    ! CLAUDE.md
+    ! .claude/settings.json
+    ! docs/CLAUDE.md
+
+Take the stored brain and discard the above? [y/N] 
+Synchronized (discarded 3 local-only file(s)).

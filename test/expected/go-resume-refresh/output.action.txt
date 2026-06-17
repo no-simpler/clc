@@ -1,0 +1,6 @@
+Launching (feat)
+  %%PARENT_DIR%%/main/.claude/worktrees/feat
+  refreshed 1 brain file(s) from store
+[claude-stub] launched in feat
+
+peer has refreshed file? yes

@@ -1,0 +1,10 @@
+store tracked files after delete+save:
+.clc/registry
+<project>/.claude/settings.json
+<project>/CLAUDE.md
+
+untracked orphans in store:
+  (none)
+
+deleted file physically present in store?
+  no

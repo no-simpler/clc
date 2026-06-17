@@ -1,10 +1,11 @@
-reconcile from the peer (brain missing → diverges; main in sync):
+reconcile from the peer (brain missing → behind; main in sync):
 Reconcile
   current worktree ↔ store
-    + .claude/settings.json (only in store)
-    + CLAUDE.md (only in store)
+    ↓ .claude/settings.json (behind — store is newer)
+    ↓ CLAUDE.md (behind — store is newer)
   main worktree ↔ store
     in sync
 
-  Promote this worktree's edits into the store:  clc save
-  Take the stored brain into this worktree:      clc restore
+  Resolve everything from here:  clc reconcile --apply
+  Promote local edits:           clc save
+  Take the stored brain:         clc restore
