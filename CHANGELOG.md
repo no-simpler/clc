@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-06-17
+
+A reconciliation release. clc now understands the **direction** of every second-brain difference — whether a worktree is behind, ahead of, or genuinely diverged from the store — so it can do the safe thing automatically and ask only when there's a real conflict. Your store, enrollment, and backups are unchanged; existing worktrees pick up the new behavior on their next save/restore/`clc go`.
+
+### Fixed
+- **Deleting a brain file now actually retires it everywhere.** Previously a deleted file lingered as an untracked "orphan" inside the store: invisible to git (and to backups) yet still driving every diff and getting copied back on `restore` — so a deleted file came back to life. Deletions now propagate cleanly to the store and out to your worktrees, and no orphan is left behind.
+- **`restore` no longer cries "data loss" for a routine update.** It now warns — and lists the exact at-risk files — only when your worktree carries local-only edits that the restore would discard. A worktree that is simply behind the store is applied as a clean update with no scary prompt.
+- **`clc diff` prints readable, repo-relative paths** (e.g. `a/CLAUDE.md`) instead of long absolute store paths.
+
+### Added
+- **`clc reconcile --apply`** — resolve a worktree's whole 3-way divergence from one place instead of hand-running `save`/`restore` in two directions. It fast-forwards files you're behind on, promotes files you're ahead on (into both the store and the trunk), and prompts per file (`take store` / `keep & promote local` / `skip`) only for genuine conflicts. `-y` resolves the safe ones non-interactively and leaves conflicts for you. Plain `clc reconcile` stays read-only and now labels each file **behind / ahead / diverged**.
+- **Automatic promotion of peer-worktree brain edits.** When you commit in a feature worktree whose brain is strictly ahead of the store (and uncommitted in main), clc promotes those edits into the store **and** the trunk automatically, with a one-line notice — so a feature branch's brain improvements aren't stranded. A genuinely diverged worktree instead gets a single, rate-limited nudge to run `clc reconcile` (no more noisy warning on every commit).
+- **`clc go` refreshes a stale worktree on resume.** Resuming a worktree that's purely behind the store pulls the latest brain automatically (with a one-line notice) before launching; a worktree with local or diverged edits is left untouched with a nudge.
+- **`clc fsck [--fix]`** — report (and optionally remove) untracked orphan files in the store, cleaning up any debris left by the pre-3.1 deletion bug.
+- **`clc restore -y`** and **`clc diff --stat`** — skip the restore prompt for scripted/agent runs, and get a one-line-per-file directional summary instead of full diffs.
+
+### Changed
+- **Peer brain edits are reconciled by direction, not by a blanket "main is canonical" rule.** Safe, unambiguous edits flow automatically; only true conflicts ask for a decision. Each worktree records a small private baseline (in its git dir, never committed) so clc can tell "behind" from "ahead" from "diverged".
+
 ## [3.0.1] - 2026-06-16
 
 A bug-fix release closing a data-loss regression in v3's worktree flow, plus a more robust model for reconciling the second brain across worktrees. Your store, enrollment, and backups are unchanged. **Upgrade promptly** — the installed `clc` is what your git hooks call, so the fix only takes effect once the binary on your `PATH` is 3.0.1.
@@ -212,7 +231,8 @@ store per machine, with optional auto-backup for durability across machines.
 - Snapshot-based test suite.
 - curl installer (`install.sh`) and GitHub Actions CI.
 
-[Unreleased]: https://github.com/no-simpler/clc/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/no-simpler/clc/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/no-simpler/clc/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/no-simpler/clc/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/no-simpler/clc/compare/v2.1.2...v3.0.0
 [2.1.2]: https://github.com/no-simpler/clc/compare/v2.1.1...v2.1.2
