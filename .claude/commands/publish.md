@@ -2,7 +2,7 @@
 
 Run a complete clc release. Execute each step in order, verifying before proceeding to the next.
 
-**This flow is entirely agent-runnable.** Every step — including the commit, push, GitHub release, and Homebrew tap update — can be run directly by the agent. Authentication (commit signing, `git push`, the tap push) is gated by TouchID, so the only thing required of the user is to be at the desk to confirm the TouchID prompts as they appear. Do not hand the user copy-paste blocks; run the commands yourself and let TouchID handle authorization.
+**This flow is entirely agent-runnable**; run every step yourself.
 
 ## Steps
 
@@ -39,7 +39,7 @@ CLC_VERSION="X.Y.Z"
 
 ### 4. Commit
 
-Stage and commit the version bump (signing is TouchID-gated — confirm the prompt):
+Stage and commit the version bump:
 
 ```bash
 git add clc.sh CHANGELOG.md
@@ -70,7 +70,7 @@ gh release create vX.Y.Z clc.sh install.sh \
 
 ### 8. Update Homebrew tap
 
-Compute the SHA256 of the release tarball, then run the tap update directly (the tap push is TouchID-gated — confirm the prompt when it appears). Substitute `X.Y.Z` and `$SHA` before running:
+Compute the SHA256 of the release tarball, then run the tap update directly. Substitute `X.Y.Z` and `$SHA` before running:
 
 ```bash
 SHA=$(curl -sL https://github.com/no-simpler/clc/archive/refs/tags/vX.Y.Z.tar.gz \
