@@ -1,0 +1,11 @@
+Enrolled
+  registered
+  unset redundant core.hooksPath (was %%PARENT_DIR%%/main/.git/hooks)
+  hooks: post-commit, post-merge, post-checkout
+  brain: 1 Claude file(s) → store
+
+core.hooksPath: ''
+hooks present:
+  post-commit
+  post-merge
+  post-checkout

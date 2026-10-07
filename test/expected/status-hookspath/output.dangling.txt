@@ -1,0 +1,9 @@
+Repository (parent dir: %%PARENT_DIR%%)
+
+Enrollment
+  enrolled
+  hooks: (none installed)
+      core.hooksPath points to a missing dir — git runs no hooks: %%PARENT_DIR%%/nowhere
+
+Worktrees
+  1 * dangling  (main)

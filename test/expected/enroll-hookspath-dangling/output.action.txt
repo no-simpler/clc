@@ -1,0 +1,8 @@
+clc: error: core.hooksPath points to a missing dir — git runs no hooks: %%PARENT_DIR%%/ghost/.git/hooks
+  fix: git config --unset core.hooksPath   (use .git/hooks)
+   or: mkdir -p '%%PARENT_DIR_ABS%%/ghost/.git/hooks'
+exit: 1
+
+ghost dir: absent
+registry: absent
+exclude: untouched

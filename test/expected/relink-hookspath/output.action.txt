@@ -1,0 +1,10 @@
+Relinked
+  <case>/old → <case>/moved
+  unset stale core.hooksPath (was ~/<case>/old/.git/hooks)
+
+core.hooksPath: ''
+hooks present:
+  post-commit
+  post-merge
+  post-checkout
+old: absent

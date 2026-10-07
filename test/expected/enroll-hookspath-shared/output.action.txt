@@ -1,0 +1,12 @@
+clc: warning: core.hooksPath is set in global config (shared by all repos) — clc hooks not installed
+Enrolled
+  registered
+  hooks: (not installed)
+  brain: 1 Claude file(s) → store
+
+global hooks dir: 0 file(s)
+
+Doctor
+  %%PARENT_DIR_HOME%%/main  hooks
+      core.hooksPath is set in global config (shared by all repos) — clc hooks not installed
+      (git config core.hooksPath '%%PARENT_DIR_ABS%%/main/.git/hooks' && clc enroll)

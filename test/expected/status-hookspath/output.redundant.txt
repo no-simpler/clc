@@ -1,0 +1,9 @@
+Repository (parent dir: %%PARENT_DIR%%)
+
+Enrollment
+  enrolled
+  hooks: post-commit, post-merge, post-checkout
+      core.hooksPath is redundant (equals .git/hooks) and breaks if the repo moves
+
+Worktrees
+  1 * redundant  (main)

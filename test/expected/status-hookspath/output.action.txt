@@ -1,0 +1,9 @@
+Doctor
+  %%PARENT_DIR_HOME%%/dangling  hooks
+      core.hooksPath points to a missing dir — git runs no hooks: %%PARENT_DIR%%/nowhere
+      (git config --unset core.hooksPath && clc enroll)
+  %%PARENT_DIR_HOME%%/redundant  hooks
+      core.hooksPath is redundant (equals .git/hooks) and breaks if the repo moves
+      (git config --unset core.hooksPath)
+
+nowhere: absent

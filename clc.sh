@@ -353,30 +353,98 @@ clc_self() {
     echo "${_CLC_SELF}"
 }
 
-# Directory where hooks live for the given main gitdir. Honors core.hooksPath
-# (composes with husky/lefthook); else <main_gitdir>/hooks (§6.5).
-hooks_dir() {
+# Classify the effective core.hooksPath (any config scope, `~` expanded) for the
+# given main gitdir. Prints `state<TAB>scope<TAB>dir`; state is one of:
+#   default    unset → <main_gitdir>/hooks
+#   custom     repo-scoped, existing dir (husky/lefthook)
+#   redundant  repo-scoped, resolves to <main_gitdir>/hooks and overrides nothing
+#              (unsetting is a no-op today; the absolute value rots on a move)
+#   dangling   repo-scoped, dir missing — git runs no hooks
+#   shared     global/system scope — one dir for every repo; clc stays out
+# A relative value resolves against the main worktree (git uses the running
+# worktree's root; the same for committed dirs like .husky).
+hooks_path_state() {
     local main_gitdir="$1"
-    local hp
-    hp=$(git config -f "${main_gitdir}/config" core.hooksPath 2>/dev/null || true)
-    if [[ -n "${hp}" ]]; then
-        if [[ "${hp}" != /* ]]; then
-            # Relative to the main worktree.
-            hp="$(git_main_worktree "${main_gitdir}")/${hp}"
-        fi
-        echo "${hp}"
-    else
-        echo "${main_gitdir}/hooks"
+    local line scope hp state
+    line=$(git --git-dir="${main_gitdir}" config --show-scope --type=path \
+        --get core.hooksPath 2>/dev/null || true)
+    if [[ -z "${line}" ]]; then
+        printf 'default\tnone\t%s\n' "${main_gitdir}/hooks"
+        return
+    fi
+    scope="${line%%$'\t'*}"
+    hp="${line#*$'\t'}"
+    [[ "${hp}" == /* ]] || hp="$(git_main_worktree "${main_gitdir}")/${hp}"
+    case "${scope}" in
+        local|worktree)
+            if [[ ! -d "${hp}" ]]; then
+                state=dangling
+            elif [[ "$(cd -P "${hp}" && pwd)" == "$(cd -P "${main_gitdir}/hooks" 2>/dev/null && pwd)" ]] \
+                && [[ $(git --git-dir="${main_gitdir}" config --get-all core.hooksPath | grep -c .) -eq 1 ]]; then
+                state=redundant
+            else
+                state=custom
+            fi ;;
+        *)  state=shared ;;
+    esac
+    printf '%s\t%s\t%s\n' "${state}" "${scope}" "${hp}"
+}
+
+# Directory where hooks live for the given main gitdir (§6.5).
+hooks_dir() {
+    local _s _sc dir
+    IFS=$'\t' read -r _s _sc dir <<< "$(hooks_path_state "$1")"
+    echo "${dir}"
+}
+
+# One-line problem description for a hooks state; empty when healthy.
+hooks_path_problem() {
+    local state="$1" scope="$2" dir="$3"
+    case "${state}" in
+        dangling)  echo "core.hooksPath points to a missing dir — git runs no hooks: $(short_path "${dir}")" ;;
+        redundant) echo "core.hooksPath is redundant (equals .git/hooks) and breaks if the repo moves" ;;
+        shared)    echo "core.hooksPath is set in ${scope} config (shared by all repos) — clc hooks not installed" ;;
+    esac
+}
+
+# Status line for the hooks dir: warning when misconfigured, muted path when
+# custom, nothing for the default.
+print_hooks_path_line() {
+    local state scope dir problem
+    IFS=$'\t' read -r state scope dir <<< "$(hooks_path_state "$1")"
+    problem=$(hooks_path_problem "${state}" "${scope}" "${dir}")
+    if [[ -n "${problem}" ]]; then
+        print_warning_line "${problem}"
+    elif [[ "${state}" == custom ]]; then
+        echo "  hooks path: ${CLR_MUTED}$(short_path "${dir}")${CLR_RESET}"
     fi
 }
 
-# Install the managed block into each hook (idempotent, non-clobbering).
+# Unset a repo-scoped core.hooksPath that equals the repo's own hooks dir: same
+# behavior today, immune to moves. Prints the dropped value when it acts.
+hooks_path_normalize() {
+    local main_gitdir="$1"
+    local state scope dir
+    IFS=$'\t' read -r state scope dir <<< "$(hooks_path_state "${main_gitdir}")"
+    [[ "${state}" == redundant ]] || return 0
+    git --git-dir="${main_gitdir}" config --"${scope}" --unset core.hooksPath
+    echo "${dir}"
+}
+
+# Install the managed block into each hook (idempotent, non-clobbering). Refuses
+# (warning, return 1, nothing written) when the hooks dir is dangling or shared —
+# a configured hooksPath is validated, never created.
 install_hooks() {
     local main_gitdir="$1"
-    local dir self hook file
-    dir=$(hooks_dir "${main_gitdir}")
+    local state scope dir self hook file
+    IFS=$'\t' read -r state scope dir <<< "$(hooks_path_state "${main_gitdir}")"
+    case "${state}" in
+        dangling|shared)
+            echo "clc: warning: $(hooks_path_problem "${state}" "${scope}" "${dir}")" >&2
+            return 1 ;;
+        default) mkdir -p "${dir}" ;;
+    esac
     self=$(clc_self)
-    mkdir -p "${dir}"
     for hook in ${CLC_HOOKS}; do
         file="${dir}/${hook}"
         if [[ -f "${file}" ]] && grep -qF "${CLC_HOOK_BEGIN}" "${file}" 2>/dev/null; then
@@ -2161,6 +2229,7 @@ cmd_status() {
                 "$(_join ', ' "${hooks_present[@]}")" "${CLR_MUTED}" \
                 "$(_join ', ' "${hooks_missing[@]}")" "${CLR_RESET}"
         fi
+        print_hooks_path_line "${main_gitdir}"
     fi
 
     # Section 1.6: Backups staleness (only when targets are configured — absent
@@ -2420,9 +2489,11 @@ _store_unenroll() {
 
 # Enroll core (§4.7), decoupled from $PWD: gitignore + register + hooks + sync for
 # a repo whose paths are already resolved. Shared by cmd_enroll (PWD-resolved) and
-# cmd_migrate (per-candidate). Sets _STORE_SYNC_RESULT (read by callers for output).
+# cmd_migrate (per-candidate). Sets _STORE_SYNC_RESULT and _HOOKS_NORMALIZED (read
+# by callers for output).
 # Args: <main_gitdir> <main_worktree> <current_worktree> [<rel>]. Returns non-zero
 # (no side effects) when the repo is outside $HOME — caller decides how to report.
+_HOOKS_NORMALIZED=""   # hooksPath value _enroll_at unset as redundant, if any
 _enroll_at() {
     local main_gitdir="$1" main_worktree="$2" current_worktree="$3" rel="${4-}"
 
@@ -2441,8 +2512,9 @@ _enroll_at() {
     # The just-synced worktree now matches the store — record its baseline.
     baseline_advance "${current_worktree}"
 
-    # 3. Install hooks (once, at the main gitdir).
-    install_hooks "${main_gitdir}"
+    # 3. Install hooks (once, at the main gitdir). A refusal already warned.
+    _HOOKS_NORMALIZED=$(hooks_path_normalize "${main_gitdir}")
+    install_hooks "${main_gitdir}" || true
 }
 
 # Graduate ignore → full enrollment (§4.7): gitignore + register + hooks + sync.
@@ -2455,11 +2527,25 @@ cmd_enroll() {
     local rel="${main_worktree#${HOME}/}"
     [[ "${rel}" != "${main_worktree}" ]] || die "project is not under \$HOME — cannot derive store identity"
 
+    # Preflight: a dangling hooksPath would leave enrollment hookless — refuse
+    # before any side effect.
+    local hstate hscope hdir
+    IFS=$'\t' read -r hstate hscope hdir <<< "$(hooks_path_state "${main_gitdir}")"
+    [[ "${hstate}" != dangling ]] || die "$(hooks_path_problem "${hstate}" "${hscope}" "${hdir}")
+  fix: git config --unset core.hooksPath   (use .git/hooks)
+   or: mkdir -p '${hdir}'"
+
     _enroll_at "${main_gitdir}" "${main_worktree}" "${current_worktree}" "${rel}"
 
     print_header "Enrolled"
     echo "  registered"
-    echo "  hooks: $(_join ', ' post-commit post-merge post-checkout)"
+    [[ -z "${_HOOKS_NORMALIZED}" ]] \
+        || echo "  ${CLR_MUTED}unset redundant core.hooksPath (was $(short_path "${_HOOKS_NORMALIZED}"))${CLR_RESET}"
+    if hook_installed "${main_gitdir}" post-commit; then
+        echo "  hooks: $(_join ', ' ${CLC_HOOKS})"
+    else
+        echo "  hooks: ${CLR_MUTED}(not installed)${CLR_RESET}"
+    fi
     if [[ "${_STORE_SYNC_RESULT}" == "noop" ]]; then
         echo "  brain: ${CLR_MUTED}(store already up to date)${CLR_RESET}"
     else
@@ -3107,6 +3193,25 @@ deploy_brain() {
     done < <(collect_claude_files_in_dir "${mirror_dir}")
 }
 
+# Doctor finding for a repo's hooks dir. Returns 1 (after printing) when the
+# hooksPath is misconfigured; silent 0 when healthy or not a git repo.
+_doctor_hooks() {
+    local localpath="$1" rel="$2"
+    local main_gitdir state scope dir fix
+    main_gitdir=$(cd "${localpath}" && git_main_gitdir 2>/dev/null) || return 0
+    IFS=$'\t' read -r state scope dir <<< "$(hooks_path_state "${main_gitdir}")"
+    case "${state}" in
+        dangling)  fix="git config --unset core.hooksPath && clc enroll" ;;
+        redundant) fix="git config --unset core.hooksPath" ;;
+        shared)    fix="git config core.hooksPath '${main_gitdir}/hooks' && clc enroll" ;;
+        *)         return 0 ;;
+    esac
+    printf "  %s  hooks\n" "${rel}"
+    print_warning_line "$(hooks_path_problem "${state}" "${scope}" "${dir}")"
+    printf "      %s(%s)%s\n" "${CLR_MUTED}" "${fix}" "${CLR_RESET}"
+    return 1
+}
+
 # `clc doctor` — READ-ONLY health check (§6.4). Reports + suggests; never acts.
 cmd_doctor() {
     local store; store="$(clc_store_dir)"
@@ -3125,15 +3230,17 @@ cmd_doctor() {
             printf "  %s  missing\n" "${rel}"
             printf "      %s(run 'clc clone' / 'clc adopt')%s\n" "${CLR_MUTED}" "${CLR_RESET}"
         else
+            local healthy=1
             actual_origin="$(repo_origin "${localpath}")"
             if [[ -n "${origin}" && "${actual_origin}" != "${origin}" ]]; then
+                healthy=0
                 printf "  %s  origin drift\n" "${rel}"
                 printf "      %sregistry: %s%s\n" "${CLR_MUTED}" "${origin}" "${CLR_RESET}"
                 printf "      %slocal:    %s%s\n" "${CLR_MUTED}" "${actual_origin}" "${CLR_RESET}"
                 printf "      %s(run 'clc relink')%s\n" "${CLR_MUTED}" "${CLR_RESET}"
-            else
-                printf "  %s  ok\n" "${rel}"
             fi
+            _doctor_hooks "${localpath}" "${rel}" || healthy=0
+            [[ ${healthy} -eq 0 ]] || printf "  %s  ok\n" "${rel}"
         fi
     done < <(registry_read)
 
@@ -3252,13 +3359,25 @@ cmd_relink() {
 
     with_store_lock _store_relink "${old}" "${new_rel}" "${origin}"
 
+    # A hooksPath naming the old location's own .git/hooks is the move-rot
+    # signature: it was redundant before the move, so drop it.
+    local hstate hscope hdir hooks_note=""
+    IFS=$'\t' read -r hstate hscope hdir <<< "$(hooks_path_state "${main_gitdir}")"
+    if [[ "${hstate}" == dangling && "${hdir}" == "${HOME}/${old}/.git/hooks" ]]; then
+        git --git-dir="${main_gitdir}" config --"${hscope}" --unset core.hooksPath
+        hooks_note="unset stale core.hooksPath (was $(short_path "${hdir}"))"
+    elif [[ -n "$(hooks_path_normalize "${main_gitdir}")" ]]; then
+        hooks_note="unset redundant core.hooksPath"
+    fi
+
     # Belt-and-suspenders: re-ignore + reinstall hooks at the new gitdir (the moved
-    # repo carried its own .git; these are idempotent).
+    # repo carried its own .git; these are idempotent). A refusal already warned.
     _ignore_patterns "${main_gitdir}" >/dev/null
-    install_hooks "${main_gitdir}"
+    install_hooks "${main_gitdir}" || true
 
     print_header "Relinked"
     printf "  %s → %s\n" "${old}" "${new_rel}"
+    [[ -z "${hooks_note}" ]] || echo "  ${CLR_MUTED}${hooks_note}${CLR_RESET}"
     echo
 
     cmd_status
@@ -3273,7 +3392,7 @@ _cold_deploy() {
     local main_gitdir
     if main_gitdir=$(cd "${localpath}" && git_main_gitdir 2>/dev/null); then
         _ignore_patterns "${main_gitdir}" >/dev/null
-        install_hooks "${main_gitdir}"
+        install_hooks "${main_gitdir}" || true   # a refusal already warned
     fi
 }
 
@@ -3451,8 +3570,8 @@ ${CLR_BOLD}Actions (Transplant):${CLR_RESET}
 
 ${CLR_BOLD}Actions (Cross-machine):${CLR_RESET}
   ${CLR_BOLD}doctor${CLR_RESET}                 Report cross-machine drift for every enrolled repo
-                         ${CLR_MUTED}(missing / origin drift / unregistered). Read-only;
-                         suggests the fix command, never acts.${CLR_RESET}
+                         ${CLR_MUTED}(missing / origin drift / unregistered / broken
+                         core.hooksPath). Read-only; suggests the fix, never acts.${CLR_RESET}
   ${CLR_BOLD}relink${CLR_RESET} ${CLR_MUTED}[<old-home-relative-path>]${CLR_RESET}
                          Re-key a moved repo: run from its new location to
                          rewrite the registry and move its store subtree.
@@ -3472,7 +3591,8 @@ ${CLR_BOLD}Files clc creates (never committed to your repo):${CLR_RESET}
                 ${CLR_MUTED}.git/${CLR_RESET}; a peer ${CLR_MUTED}.git/worktrees/<name>/${CLR_RESET}.
   ${CLR_BOLD}per-repo${CLR_RESET}      ${CLR_MUTED}<gitdir>/info/exclude${CLR_RESET} (the ignore patterns) and
                 ${CLR_MUTED}<gitdir>/hooks/post-{commit,merge,checkout}${CLR_RESET} (sentinel-wrapped
-                sync shims; honors core.hooksPath).
+                sync shims). A repo-scoped core.hooksPath is honored if it
+                exists, never created; a global one is left alone.
   ${CLR_BOLD}per-machine${CLR_RESET}   ${CLR_MUTED}~/.config/clc/config${CLR_RESET} (backups), ${CLR_MUTED}~/.local/share/clc/store${CLR_RESET}
                 (central brain store + ${CLR_MUTED}.clc/registry${CLR_RESET}), ${CLR_MUTED}~/.local/state/clc${CLR_RESET}
                 (locks, backup + nudge stamps). ${CLR_MUTED}Respects XDG_*_HOME / CLC_STORE.${CLR_RESET}

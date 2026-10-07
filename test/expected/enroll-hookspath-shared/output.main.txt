@@ -1,0 +1,9 @@
+Repository (parent dir: %%PARENT_DIR%%)
+
+Enrollment
+  enrolled
+  hooks: (none installed)
+      core.hooksPath is set in global config (shared by all repos) — clc hooks not installed
+
+Worktrees
+  1 * main  (main)
